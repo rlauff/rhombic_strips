@@ -9,9 +9,6 @@ use colored::Colorize;
 
 use std::fs::read_to_string;
 
-use std::collections::HashSet;
-
-
 fn layers_to_sequence(layers: &Vec<Vec<usize>>, l: &Lattice) -> Vec<usize> {
     let n = layers.len();
     let mut pointers = vec![0; n];
@@ -49,47 +46,9 @@ fn layers_to_sequence(layers: &Vec<Vec<usize>>, l: &Lattice) -> Vec<usize> {
     seq
 }
 
-fn reduced(mut s: Vec<usize>) -> Vec<usize> {
-    let n = s.len();
-    if s[0]+1 < s[n-1] {
-        s.swap(0, n-1);
-        return reduced(s);
-    };
-    for i in 0..n-1 {
-        if s[i] > s[i+1]+1 {
-            s.swap(i, i+1);
-            return reduced(s);
-        }
-    }
-    let k = s.iter().max().unwrap() + 1;
-    let mut champion = 0;
-    let mut record = 0;
-    for i in 0..s.len() {
-        let mut val = 0;
-        for j in 0..s.len() {
-            val += (s[(i+j)%n] * k).pow(j.try_into().unwrap());
-        }
-        if val > record {
-            record = val;
-            champion = i;
-        }
-    }
-    let mut ret = vec![];
-    for i in 0..n {
-        ret.push(s[(i+champion)%n]);
-    }
-    ret
-}
-
 fn main() {
-
-    let _l = lattice_from_file("cube3d");
-
-    let dont_care_about_total = true;
-
-
-    let source = "all_graphs";
-    //let source = "test_graphs";
+    let source = "trees_6";
+    let centered = true;
     let mut graphs: Vec<Graph> = Vec::new();
 
     for edgelist in read_to_string(source).expect("Read failed.").lines() {
@@ -121,33 +80,29 @@ fn main() {
     let num_graphs = graphs.len();
 
     for (i, mut g) in graphs.into_iter().enumerate() {
-        let l = lattice_from_graph(&mut g);
-        let mut total = 0;
+        if g.edges.iter().filter(|x| x[0]==0).collect::<Vec<_>>().len() == 1 { continue };
+        let l = lattice_from_graph(&mut g, centered);
         let hcs = l.ham_cycles.clone();
         let num_hcs = hcs.len();
         if num_hcs == 0 { continue };
-        let mut sols = HashSet::new();
+        let mut found_one = false;
 
         println!("{}", format!("Graph ({i}/{num_graphs}): {:?}", g.edges).blue().bold());
         for (_i, hc) in hcs.into_iter().enumerate() {
             //print!("  Number of rhombic strips based on Hamilton cycle {:?} ({i} / {num_hcs}):    ", hc);
-            let found = rhombic_strips_dfs_simple(vec![hc], &l, l.dim.clone());
+            let found = rhombic_strips_dfs_simple(vec![hc], &l, l.dim.clone()-1);
             let num_found = found.len();
-            for sol in found.iter() {
-                sols.insert(reduced(layers_to_sequence(sol, &l)));
-            }
             //println!("{}", num_found);
-            total += num_found;
-            if dont_care_about_total && total > 0 { break };
+            if num_found > 0 { found_one = true; break };
             // if g.edges.len() >= g.vertices.len()*(g.vertices.len()-1)/2-1 {
             //     break
             // };
         }
-        if total > 0 {
-            println!("In total {} were found. Up to isomorphism: {}", format!("{}", total).green(), format!("{}", sols.len()).green());
+        if found_one {
+            println!("{}", format!("Found one!").green());
             graphs_with.push(g.edges.clone());
         } else {
-            println!("In total {} were found.", format!("{}", total).red());
+            println!("{}", format!("No luck!").red());
             graphs_without.push(g.edges.clone());
         }
         println!();
@@ -160,44 +115,3 @@ fn main() {
     println!("\n\nRatio with/without: {}", graphs_with.len() as f64/graphs_without.len() as f64);
 }
 
-
-
-
-
-fn _main() {
-
-    println!("3D cube:");
-
-    let l = lattice_from_file("cube3d");
-    let mut total = 0;
-
-    let mut sols = HashSet::new();
-    //print!("  Number of rhombic strips based on Hamilton cycle {:?} ({i} / {num_hcs}):    ", hc);
-    let found = rhombic_strips_dfs_simple(vec![vec![0,4,5,7,6,2,3,1]], &l, l.dim.clone());
-    let num_found = found.len();
-    for sol in found.iter() {
-        sols.insert(reduced(layers_to_sequence(sol, &l)));
-    }
-    //println!("{}", num_found);
-    total += num_found;
-
-    println!("In total {} were found. Up to isomorphism: {}\n", format!("{}", total).green(), format!("{}", sols.len()).green());
-
-
-    println!("4D cube:");
-
-    let l = lattice_from_file("cube4d");
-    total = 0;
-
-    let mut sols = HashSet::new();
-    //print!("  Number of rhombic strips based on Hamilton cycle {:?} ({i} / {num_hcs}):    ", hc);
-    let found = rhombic_strips_dfs_simple(vec![vec![0,1,3,2,6,7,5,4,12,13,15,14,10,11,9,8]], &l, l.dim.clone());
-    let num_found = found.len();
-    for sol in found.iter() {
-        sols.insert(reduced(layers_to_sequence(sol, &l)));
-    }
-    //println!("{}", num_found);
-    total += num_found;
-
-    println!("In total {} were found. Up to isomorphism: {}", format!("{}", total).green(), format!("{}", sols.len()).green());
-}

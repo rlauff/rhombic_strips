@@ -156,13 +156,13 @@ impl Graph {
         return true;
     }
 
-    pub fn find_tubes(&mut self) {
+    pub fn find_tubes(&mut self, centered: bool) {
         match self.tubes {
             Some(_) => {return;}
             None => {
                 let mut tubes = vec![];
                 for subset in subsets(&self.vertices).iter() {
-                    if self.is_connected(&subset) {tubes.push(subset.to_vec());}
+                    if self.is_connected(&subset) && (subset.contains(&0) || !centered) {tubes.push(subset.to_vec());}
                 }
                 self.tubes = Some(tubes);
             }
@@ -194,6 +194,12 @@ impl Graph {
         }
         active_paths.into_iter().filter(|x| self.edges.contains(&[x[x.len()-1], self.vertices[0]]) || self.edges.contains(&[self.vertices[0], x[x.len()-1]])).collect()
     }
+
+    pub fn ham_paths_centered(&self) -> Vec<Vec<usize>> {
+        let V:Vec<_> = self.edges.iter().filter(|x| x[0]==0).collect();
+        let n = V.len();
+        V.into_iter().map(|x| x[1]).permutations(n).collect()
+    }
 }
 
 fn is_above(tube1: &Vec<usize>, tube2: &Vec<usize>) -> bool {
@@ -204,11 +210,10 @@ fn is_above(tube1: &Vec<usize>, tube2: &Vec<usize>) -> bool {
     true
 }
 
-pub fn lattice_from_graph(g: &mut Graph) -> Lattice {
-    g.find_tubes();
+pub fn lattice_from_graph(g: &mut Graph, centered: bool) -> Lattice {
+    g.find_tubes(centered);
     let tubes = g.tubes.clone().unwrap();
-    let _ham_cycles = g.ham_cycles();
-
+    let hcs = if centered { g.ham_paths_centered() } else { g.ham_cycles() };
 
     let mut faces = vec![];
     for tube in tubes.iter() {
@@ -264,16 +269,28 @@ pub fn lattice_from_graph(g: &mut Graph) -> Lattice {
         }
     }
 
-    //ham_cycles
     let mut ham_cycles = vec![];
-    for hc in _ham_cycles.into_iter() {
-        let mut c = vec![];
-        for elem in hc.iter() {
-            for (i, face) in faces.iter().enumerate() {
-                if face.label == format!("{:?}", vec![elem]) { c.push(i) };
+    if !centered {
+        //ham_cycles
+        for hc in hcs.into_iter() {
+            let mut c = vec![];
+            for elem in hc.iter() {
+                for (i, face) in faces.iter().enumerate() {
+                    if face.label == format!("{:?}", vec![elem]) { c.push(i) };
+                }
             }
+            ham_cycles.push(c);
         }
-        ham_cycles.push(c);
+    } else {
+        for hc in hcs.into_iter() {
+            let mut c = vec![];
+            for v in hc.iter() {
+                for (i, face) in faces.iter().enumerate() {
+                    if face.label == format!("[0, {}]", v) { c.push(i) };
+                }
+            }
+            ham_cycles.push(c);
+        }
     }
 
     Lattice {

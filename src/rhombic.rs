@@ -93,6 +93,7 @@ fn combine_to_layer(bridges: &Vec<usize>, gaps: &Vec<Vec<usize>>) -> Vec<usize> 
 }
 
 fn duplicates_removed(v: Vec<usize>) -> Vec<usize> {
+    if v.len() == 0 { return vec![] };
     let mut res = vec![v[0]];
     for i in 1..v.len() {
         if v[i-1] != v[i] && v[i] != v[0] {
@@ -116,7 +117,7 @@ fn duplicates_removed(v: Vec<usize>) -> Vec<usize> {
 //                  |    |    |    |    |
 //  indices:        0    1    2    3    4
 
-pub fn next_layers_simple(last_layer: &Vec<usize>, l: &Lattice) -> Vec<Vec<usize>> {
+pub fn _next_layers_simple_cyclic(last_layer: &Vec<usize>, l: &Lattice) -> Vec<Vec<usize>> {
     //println!("{:?}", last_layer.clone().into_iter().map(|i| l.faces[i].label.clone()).collect::<Vec<_>>());
     let dim = l.faces[last_layer[0]].dim;
     let n = last_layer.len();
@@ -131,6 +132,23 @@ pub fn next_layers_simple(last_layer: &Vec<usize>, l: &Lattice) -> Vec<Vec<usize
         .filter(|x| layer_ok(x))
         .map(|x| duplicates_removed(x))
         .collect()
+}
+
+pub fn next_layers_simple(last_layer: &Vec<usize>, l: &Lattice) -> Vec<Vec<usize>> {
+    let dim = l.faces[last_layer[0]].dim;
+    // if dim <= 2 { println!("{:?}", last_layer.clone().into_iter().map(|i| l.faces[i].label.clone()).collect::<Vec<_>>()) };
+    let n = last_layer.len();
+    let bridges: Vec<_> = (0..n-1).map(|x| l.bridges[&min_max(last_layer[x], last_layer[x+1])]).collect();
+    if !layer_ok(&bridges) { return vec![] };
+    let faces_left: &Vec<_> = &l.levels[dim+1].clone().into_iter().filter(|x| !bridges.contains(x)).collect();
+    let gaps: Vec<_> = (0..n).map(|i| l.faces[last_layer[i]].upset.clone().into_iter().filter(|x| !bridges.contains(x)).collect::<Vec<_>>()).collect();
+
+    gap_assignments_simple(&gaps, &faces_left)
+    .iter()
+    .map(|x| combine_to_layer(&bridges, x))
+    .filter(|x| layer_ok(x))
+    .map(|x| duplicates_removed(x))
+    .collect()
 }
 
 pub fn rhombic_strips_dfs_simple(strip: Vec<Vec<usize>>, l: &Lattice, max_dim: usize) -> Vec<Vec<Vec<usize>>> {
@@ -149,6 +167,8 @@ pub fn rhombic_strips_dfs_simple(strip: Vec<Vec<usize>>, l: &Lattice, max_dim: u
     }
     continuations.into_par_iter().map(|x| rhombic_strips_dfs_simple(x, l, max_dim)).flatten().collect()
 }
+
+
 
 
 
