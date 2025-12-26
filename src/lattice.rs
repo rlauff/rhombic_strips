@@ -18,19 +18,27 @@ pub struct Face {
 }
 
 #[derive(Debug)]
-pub struct Lattice {
+pub struct Lattice {    // all usize are indices pointing into the faces vec
     pub faces: Vec<Face>,
-    pub levels: Vec<Vec<usize>>,
-    pub bridges: HashMap<(usize, usize), usize>,
+    pub levels: Vec<Vec<usize>>, 
+    pub bridges_above: HashMap<(usize, usize), usize>, // for a pair in the same level, returns the bridge above
+    pub bridges_below: HashMap<(usize, usize), usize>, // for a pair in the same level, returns the bridge below
     pub dim: usize,
-    pub ham_cycles: Vec<Vec<usize>>,
 }
 
 //bridges are precomputed and stored in the face lattice object. Note that the keys of the bridges HashMap are the edges of the graphs on this levels
 
-fn bridge(faces: &Vec<Face>, f1: usize, f2: usize) -> Option<usize> {
+fn bridge_above(faces: &Vec<Face>, f1: usize, f2: usize) -> Option<usize> {
     for (i, face) in faces.iter().enumerate() {
         if face.downset.contains(&f1) && face.downset.contains(&f2) {
+            return Some(i);
+        }
+    }
+    None
+}
+fn bridge_below(faces: &Vec<Face>, f1: usize, f2: usize) -> Option<usize> {
+    for (i, face) in faces.iter().enumerate() {
+        if face.upset.contains(&f1) && face.upset.contains(&f2) {
             return Some(i);
         }
     }
@@ -40,12 +48,8 @@ fn bridge(faces: &Vec<Face>, f1: usize, f2: usize) -> Option<usize> {
 pub fn lattice_from_file(file: &str) -> Lattice {
     //read and store faces as in the file
     let mut faces: Vec<Face> = vec![];
-    let mut ham_cycle = vec![];
     for face_str in read_to_string(file).expect("reading file failed").lines() {
         if face_str.chars().nth(0).unwrap() == '[' {
-            //println!("{:?}", face_str[1..face_str.len()-1].split(", ").collect::<Vec<_>>());
-            ham_cycle = face_str[1..face_str.len()-1].split(", ")
-            .map(|x| x.parse::<usize>().expect("something was not an integer")).collect();
             continue;
         }
 
@@ -90,16 +94,21 @@ pub fn lattice_from_file(file: &str) -> Lattice {
     }
 
     //generate and store bridges
-    let mut bridges = HashMap::new();
+    let mut bridges_above = HashMap::new();
+    let mut bridges_below = HashMap::new();
     for i in 0..faces.len() {
         for j in 0..faces.len() {
             if i >= j { continue };
             // if i == j {
             //     bridges.insert((i,j), None);
             // }
-            let b = bridge(&faces, i, j);
-            if !b.is_none() {
-                bridges.insert((i,j), b.unwrap());
+            let b_above = bridge_above(&faces, i, j);
+            let b_below = bridge_below(&faces, i, j);
+            if !b_above.is_none() {
+                bridges_above.insert((i,j), b_above.unwrap());
+            };
+            if !b_below.is_none() {
+                bridges_below.insert((i,j), b_below.unwrap());
             };
         }
     }
@@ -107,9 +116,9 @@ pub fn lattice_from_file(file: &str) -> Lattice {
     Lattice {
         faces: faces,
         levels: levels,
-        bridges: bridges,
+        bridges_above: bridges_above,
+        bridges_below: bridges_below,
         dim: max_dim,
-        ham_cycles: vec![ham_cycle] //fix so that multiple cycles can be given!
     }
 }
 
@@ -250,38 +259,31 @@ pub fn lattice_from_graph(g: &mut Graph) -> Lattice {
     }
 
     //generate and store bridges
-    let mut bridges = HashMap::new();
+    let mut bridges_above = HashMap::new();
+    let mut bridges_below = HashMap::new();
     for i in 0..faces.len() {
         for j in 0..faces.len() {
             if i >= j { continue };
             // if i == j {
             //     bridges.insert((i,j), None);
             // }
-            let b = bridge(&faces, i, j);
-            if !b.is_none() {
-                bridges.insert((i,j), b.unwrap());
+            let b_above = bridge_above(&faces, i, j);
+            let b_below = bridge_below(&faces, i, j);
+            if !b_above.is_none() {
+                bridges_above.insert((i,j), b_above.unwrap());
+            };
+            if !b_below.is_none() {
+                bridges_below.insert((i,j), b_below.unwrap());
             };
         }
-    }
-
-    //ham_cycles
-    let mut ham_cycles = vec![];
-    for hc in _ham_cycles.into_iter() {
-        let mut c = vec![];
-        for elem in hc.iter() {
-            for (i, face) in faces.iter().enumerate() {
-                if face.label == format!("{:?}", vec![elem]) { c.push(i) };
-            }
-        }
-        ham_cycles.push(c);
     }
 
     Lattice {
         faces: faces,
         levels: levels,
-        bridges: bridges,
+        bridges_above: bridges_above,
+        bridges_below: bridges_below,
         dim: max_dim,
-        ham_cycles: ham_cycles,
     }
 }
 

@@ -1,0 +1,436 @@
+   0.035708562s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint: fingerprint error for rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips)/Check { test: false }/TargetInner { name: "rhombic_strips", doc: true, ..: with_path("/home/robert/Code/rhombic_strips/src/main.rs", Edition2021) }
+   0.035723170s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rhombic_strips-72f169eb679daf05/bin-rhombic_strips`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: cargo_util::paths::read_bytes
+   1: cargo_util::paths::read
+   2: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   3: cargo::core::compiler::fingerprint::prepare_target
+   4: cargo::core::compiler::compile
+   5: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   6: cargo::ops::cargo_compile::compile_ws
+   7: cargo::ops::cargo_compile::compile_with_exec
+   8: cargo::ops::cargo_compile::compile
+   9: cargo::commands::check::exec
+  10: <cargo::cli::Exec>::exec
+  11: cargo::main
+  12: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  13: std::rt::lang_start::<()>::{closure#0}
+  14: core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/ops/function.rs:287:21
+  15: std::panicking::catch_unwind::do_call
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:590:40
+  16: std::panicking::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:553:19
+  17: std::panic::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panic.rs:359:14
+  18: std::rt::lang_start_internal::{{closure}}
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/rt.rs:175:24
+  19: std::panicking::catch_unwind::do_call
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:590:40
+  20: std::panicking::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:553:19
+  21: std::panic::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panic.rs:359:14
+  22: std::rt::lang_start_internal
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/rt.rs:171:5
+  23: main
+  24: <unknown>
+  25: __libc_start_main
+  26: <unknown>
+   0.042380941s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="rustsat_cadical"}: cargo::core::compiler::fingerprint: fingerprint error for rustsat-cadical v0.7.4/Check { test: false }/TargetInner { ..: lib_target("rustsat_cadical", ["lib"], "/home/robert/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustsat-cadical-0.7.4/src/lib.rs", Edition2021) }
+   0.042390469s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="rustsat_cadical"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rustsat-cadical-fe0ed371f449aeb2/lib-rustsat_cadical`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: cargo_util::paths::read_bytes
+   1: cargo_util::paths::read
+   2: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   3: cargo::core::compiler::fingerprint::prepare_target
+   4: cargo::core::compiler::compile
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/ops/function.rs:287:21
+  16: std::panicking::catch_unwind::do_call
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:590:40
+  17: std::panicking::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:553:19
+  18: std::panic::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panic.rs:359:14
+  19: std::rt::lang_start_internal::{{closure}}
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/rt.rs:175:24
+  20: std::panicking::catch_unwind::do_call
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:590:40
+  21: std::panicking::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:553:19
+  22: std::panic::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panic.rs:359:14
+  23: std::rt::lang_start_internal
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/rt.rs:171:5
+  24: main
+  25: <unknown>
+  26: __libc_start_main
+  27: <unknown>
+   0.042634706s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for rustsat-cadical v0.7.4/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/home/robert/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustsat-cadical-0.7.4/build.rs", Edition2021) }
+   0.042640086s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rustsat-cadical-5e03a40dcff05c6e/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: cargo_util::paths::read_bytes
+   1: cargo_util::paths::read
+   2: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   3: cargo::core::compiler::fingerprint::prepare_target
+   4: cargo::core::compiler::custom_build::build_work
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/ops/function.rs:287:21
+  18: std::panicking::catch_unwind::do_call
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:590:40
+  19: std::panicking::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:553:19
+  20: std::panic::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panic.rs:359:14
+  21: std::rt::lang_start_internal::{{closure}}
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/rt.rs:175:24
+  22: std::panicking::catch_unwind::do_call
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:590:40
+  23: std::panicking::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:553:19
+  24: std::panic::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panic.rs:359:14
+  25: std::rt::lang_start_internal
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/rt.rs:171:5
+  26: main
+  27: <unknown>
+  28: __libc_start_main
+  29: <unknown>
+   0.043382454s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint: fingerprint error for rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips)/Check { test: true }/TargetInner { name: "rhombic_strips", doc: true, ..: with_path("/home/robert/Code/rhombic_strips/src/main.rs", Edition2021) }
+   0.043389868s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rhombic_strips-8af242bb5b0aba34/test-bin-rhombic_strips`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: cargo_util::paths::read_bytes
+   1: cargo_util::paths::read
+   2: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   3: cargo::core::compiler::fingerprint::prepare_target
+   4: cargo::core::compiler::compile
+   5: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   6: cargo::ops::cargo_compile::compile_ws
+   7: cargo::ops::cargo_compile::compile_with_exec
+   8: cargo::ops::cargo_compile::compile
+   9: cargo::commands::check::exec
+  10: <cargo::cli::Exec>::exec
+  11: cargo::main
+  12: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  13: std::rt::lang_start::<()>::{closure#0}
+  14: core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/ops/function.rs:287:21
+  15: std::panicking::catch_unwind::do_call
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:590:40
+  16: std::panicking::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:553:19
+  17: std::panic::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panic.rs:359:14
+  18: std::rt::lang_start_internal::{{closure}}
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/rt.rs:175:24
+  19: std::panicking::catch_unwind::do_call
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:590:40
+  20: std::panicking::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:553:19
+  21: std::panic::catch_unwind
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panic.rs:359:14
+  22: std::rt::lang_start_internal
+             at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/rt.rs:171:5
+  23: main
+  24: <unknown>
+  25: __libc_start_main
+  26: <unknown>
+   Compiling rustsat-cadical v0.7.4
+error: failed to run custom build command for `rustsat-cadical v0.7.4`
+note: To improve backtraces for build dependencies, set the CARGO_PROFILE_DEV_BUILD_OVERRIDE_DEBUG=true environment variable to enable debug information generation.
+
+Caused by:
+  process didn't exit successfully: `/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-4aeeaeec9ee6c41b/build-script-build` (exit status: 101)
+  --- stdout
+  OPT_LEVEL = Some(0)
+  OUT_DIR = Some(/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out)
+  TARGET = Some(x86_64-unknown-linux-gnu)
+  CARGO_ENCODED_RUSTFLAGS = Some()
+  HOST = Some(x86_64-unknown-linux-gnu)
+  cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-gnu
+  CXX_x86_64-unknown-linux-gnu = None
+  cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_gnu
+  CXX_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=HOST_CXX
+  HOST_CXX = None
+  cargo:rerun-if-env-changed=CXX
+  CXX = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  RUSTC_WRAPPER = None
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  DEBUG = Some(true)
+  CARGO_CFG_TARGET_FEATURE = Some(fxsr,sse,sse2)
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=HOST_CXXFLAGS
+  HOST_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_gnu
+  CXXFLAGS_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-gnu
+  CXXFLAGS_x86_64-unknown-linux-gnu = None
+  OPT_LEVEL = Some(0)
+  OUT_DIR = Some(/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out)
+  TARGET = Some(x86_64-unknown-linux-gnu)
+  CARGO_ENCODED_RUSTFLAGS = Some()
+  HOST = Some(x86_64-unknown-linux-gnu)
+  cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-gnu
+  CXX_x86_64-unknown-linux-gnu = None
+  cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_gnu
+  CXX_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=HOST_CXX
+  HOST_CXX = None
+  cargo:rerun-if-env-changed=CXX
+  CXX = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  RUSTC_WRAPPER = None
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  DEBUG = Some(true)
+  CARGO_CFG_TARGET_FEATURE = Some(fxsr,sse,sse2)
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=HOST_CXXFLAGS
+  HOST_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_gnu
+  CXXFLAGS_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-gnu
+  CXXFLAGS_x86_64-unknown-linux-gnu = None
+  OPT_LEVEL = Some(0)
+  OUT_DIR = Some(/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out)
+  TARGET = Some(x86_64-unknown-linux-gnu)
+  CARGO_ENCODED_RUSTFLAGS = Some()
+  HOST = Some(x86_64-unknown-linux-gnu)
+  cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-gnu
+  CXX_x86_64-unknown-linux-gnu = None
+  cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_gnu
+  CXX_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=HOST_CXX
+  HOST_CXX = None
+  cargo:rerun-if-env-changed=CXX
+  CXX = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  RUSTC_WRAPPER = None
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  DEBUG = Some(true)
+  CARGO_CFG_TARGET_FEATURE = Some(fxsr,sse,sse2)
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=HOST_CXXFLAGS
+  HOST_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_gnu
+  CXXFLAGS_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-gnu
+  CXXFLAGS_x86_64-unknown-linux-gnu = None
+  OUT_DIR = Some(/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out)
+  TARGET = Some(x86_64-unknown-linux-gnu)
+  CARGO_ENCODED_RUSTFLAGS = Some()
+  HOST = Some(x86_64-unknown-linux-gnu)
+  cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-gnu
+  CXX_x86_64-unknown-linux-gnu = None
+  cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_gnu
+  CXX_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=HOST_CXX
+  HOST_CXX = None
+  cargo:rerun-if-env-changed=CXX
+  CXX = None
+  cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+  RUSTC_WRAPPER = None
+  cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+  CRATE_CC_NO_DEFAULTS = None
+  DEBUG = Some(true)
+  CARGO_CFG_TARGET_FEATURE = Some(fxsr,sse,sse2)
+  cargo:rerun-if-env-changed=CXXFLAGS
+  CXXFLAGS = None
+  cargo:rerun-if-env-changed=HOST_CXXFLAGS
+  HOST_CXXFLAGS = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_gnu
+  CXXFLAGS_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-gnu
+  CXXFLAGS_x86_64-unknown-linux-gnu = None
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  exit status: 0
+  cargo:rerun-if-env-changed=AR_x86_64-unknown-linux-gnu
+  AR_x86_64-unknown-linux-gnu = None
+  cargo:rerun-if-env-changed=AR_x86_64_unknown_linux_gnu
+  AR_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=HOST_AR
+  HOST_AR = None
+  cargo:rerun-if-env-changed=AR
+  AR = None
+  cargo:rerun-if-env-changed=ARFLAGS
+  ARFLAGS = None
+  cargo:rerun-if-env-changed=HOST_ARFLAGS
+  HOST_ARFLAGS = None
+  cargo:rerun-if-env-changed=ARFLAGS_x86_64_unknown_linux_gnu
+  ARFLAGS_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=ARFLAGS_x86_64-unknown-linux-gnu
+  ARFLAGS_x86_64-unknown-linux-gnu = None
+  cargo:rustc-link-lib=static=cadical
+  cargo:rustc-link-search=native=/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out
+  cargo:rerun-if-env-changed=CXXSTDLIB_x86_64-unknown-linux-gnu
+  CXXSTDLIB_x86_64-unknown-linux-gnu = None
+  cargo:rerun-if-env-changed=CXXSTDLIB_x86_64_unknown_linux_gnu
+  CXXSTDLIB_x86_64_unknown_linux_gnu = None
+  cargo:rerun-if-env-changed=HOST_CXXSTDLIB
+  HOST_CXXSTDLIB = None
+  cargo:rerun-if-env-changed=CXXSTDLIB
+  CXXSTDLIB = None
+  cargo:rustc-link-lib=stdc++
+  cargo:rustc-link-search=/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out
+  cargo:rustc-link-search=/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out/lib
+  cargo:rustc-link-lib=static=cadical
+  cargo:rustc-link-lib=dylib=stdc++
+  cargo:rerun-if-changed=cpp-extension/ccadical_extension.h
+  cargo:rerun-if-changed=cpp-extension/ctracer.h
+  cargo:rerun-if-changed=cpp-extension/ccadical_extension.cpp
+  cargo:rerun-if-changed=cpp-extension/ctracer.cpp
+  cargo:rerun-if-changed=cpp-extension/solver_extension.cpp
+
+  --- stderr
+
+  thread 'main' (23217) panicked at /home/robert/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bindgen-0.72.1/lib.rs:616:27:
+  Unable to find libclang: "couldn't find any valid shared libraries matching: ['libclang.so', 'libclang-*.so', 'libclang.so.*', 'libclang-*.so.*'], set the `LIBCLANG_PATH` environment variable to a path where one of these files can be found (invalid: [])"
+  stack backtrace:
+     0: __rustc::rust_begin_unwind
+               at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/panicking.rs:698:5
+     1: core::panicking::panic_fmt
+               at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/panicking.rs:75:14
+     2: core::result::unwrap_failed
+               at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/core/src/result.rs:1855:5
+     3: core::result::Result<T,E>::expect
+     4: bindgen::ensure_libclang_is_loaded::{{closure}}
+     5: std::sync::once_lock::OnceLock<T>::get_or_init::{{closure}}
+     6: std::sync::once_lock::OnceLock<T>::initialize::{{closure}}
+     7: std::sync::poison::once::Once::call_once_force::{{closure}}
+     8: std::sys::sync::once::futex::Once::call
+               at /rustc/ed61e7d7e242494fb7057f2657300d9e77bb4fcb/library/std/src/sys/sync/once/futex.rs:178:21
+     9: std::sync::poison::once::Once::call_once_force
+    10: std::sync::once_lock::OnceLock<T>::initialize
+    11: std::sync::once_lock::OnceLock<T>::get_or_try_init
+    12: std::sync::once_lock::OnceLock<T>::get_or_init
+    13: bindgen::ensure_libclang_is_loaded
+    14: bindgen::Bindings::generate
+    15: bindgen::Builder::generate
+    16: build_script_build::generate_bindings
+    17: build_script_build::main
+    18: core::ops::function::FnOnce::call_once
+  note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.

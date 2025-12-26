@@ -81,7 +81,7 @@ fn reduced(mut s: Vec<usize>) -> Vec<usize> {
     ret
 }
 
-fn main() {
+fn _main() {
 
     let _l = lattice_from_file("cube3d");
 
@@ -164,7 +164,7 @@ fn main() {
 
 
 
-fn _main() {
+fn main() {
 
     println!("3D cube:");
 

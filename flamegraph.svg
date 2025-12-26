@@ -1,0 +1,491 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="902" onload="init(evt)" viewBox="0 0 1200 902" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:12px }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = false;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="902" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="24.00">Flame Graph</text><text id="details" fill="rgb(0,0,0)" x="10" y="885.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="24.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="24.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="885.00"> </text><svg id="frames" x="10" width="1180" total_samples="25276789"><g><title>__GI___snprintf (2,687 samples, 0.01%)</title><rect x="0.0018%" y="773" width="0.0106%" height="15" fill="rgb(227,0,7)" fg:x="464" fg:w="2687"/><text x="0.2518%" y="783.50"></text></g><g><title>__vsnprintf_internal (2,687 samples, 0.01%)</title><rect x="0.0018%" y="757" width="0.0106%" height="15" fill="rgb(217,0,24)" fg:x="464" fg:w="2687"/><text x="0.2518%" y="767.50"></text></g><g><title>__printf_buffer (2,687 samples, 0.01%)</title><rect x="0.0018%" y="741" width="0.0106%" height="15" fill="rgb(221,193,54)" fg:x="464" fg:w="2687"/><text x="0.2518%" y="751.50"></text></g><g><title>name_stack_maps (3,198 samples, 0.01%)</title><rect x="0.0016%" y="789" width="0.0127%" height="15" fill="rgb(248,212,6)" fg:x="411" fg:w="3198"/><text x="0.2516%" y="799.50"></text></g><g><title>&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (13,466 samples, 0.05%)</title><rect x="0.0188%" y="645" width="0.0533%" height="15" fill="rgb(208,68,35)" fg:x="4751" fg:w="13466"/><text x="0.2688%" y="655.50"></text></g><g><title>&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator&gt;::try_fold (13,466 samples, 0.05%)</title><rect x="0.0188%" y="629" width="0.0533%" height="15" fill="rgb(232,128,0)" fg:x="4751" fg:w="13466"/><text x="0.2688%" y="639.50"></text></g><g><title>rhombic_strips::rhombic::layer_ok (13,466 samples, 0.05%)</title><rect x="0.0188%" y="613" width="0.0533%" height="15" fill="rgb(207,160,47)" fg:x="4751" fg:w="13466"/><text x="0.2688%" y="623.50"></text></g><g><title>&lt;alloc::vec::into_iter::IntoIter&lt;T,A&gt; as core::iter::traits::iterator::Iterator&gt;::fold (306,659 samples, 1.21%)</title><rect x="0.0721%" y="629" width="1.2132%" height="15" fill="rgb(228,23,34)" fg:x="18218" fg:w="306659"/><text x="0.3221%" y="639.50"></text></g><g><title>&lt;alloc::vec::into_iter::IntoIter&lt;T,A&gt; as core::clone::Clone&gt;::clone (306,257 samples, 1.21%)</title><rect x="0.0737%" y="613" width="1.2116%" height="15" fill="rgb(218,30,26)" fg:x="18620" fg:w="306257"/><text x="0.3237%" y="623.50"></text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (320,128 samples, 1.27%)</title><rect x="0.0188%" y="677" width="1.2665%" height="15" fill="rgb(220,122,19)" fg:x="4751" fg:w="320128"/><text x="0.2688%" y="687.50"></text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (320,128 samples, 1.27%)</title><rect x="0.0188%" y="661" width="1.2665%" height="15" fill="rgb(250,228,42)" fg:x="4751" fg:w="320128"/><text x="0.2688%" y="671.50"></text></g><g><title>alloc::vec::in_place_collect::&lt;impl alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt; for alloc::vec::Vec&lt;T&gt;&gt;::from_iter (306,662 samples, 1.21%)</title><rect x="0.0721%" y="645" width="1.2132%" height="15" fill="rgb(240,193,28)" fg:x="18217" fg:w="306662"/><text x="0.3221%" y="655.50"></text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (169,483 samples, 0.67%)</title><rect x="1.2853%" y="629" width="0.6705%" height="15" fill="rgb(216,20,37)" fg:x="324879" fg:w="169483"/><text x="1.5353%" y="639.50"></text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (169,483 samples, 0.67%)</title><rect x="1.2853%" y="613" width="0.6705%" height="15" fill="rgb(206,188,39)" fg:x="324879" fg:w="169483"/><text x="1.5353%" y="623.50"></text></g><g><title>malloc (139,367 samples, 0.55%)</title><rect x="1.4044%" y="597" width="0.5514%" height="15" fill="rgb(217,207,13)" fg:x="354995" fg:w="139367"/><text x="1.6544%" y="607.50"></text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (332,025 samples, 1.31%)</title><rect x="1.9558%" y="581" width="1.3136%" height="15" fill="rgb(231,73,38)" fg:x="494362" fg:w="332025"/><text x="2.2058%" y="591.50"></text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (332,025 samples, 1.31%)</title><rect x="1.9558%" y="565" width="1.3136%" height="15" fill="rgb(225,20,46)" fg:x="494362" fg:w="332025"/><text x="2.2058%" y="575.50"></text></g><g><title>&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (332,025 samples, 1.31%)</title><rect x="1.9558%" y="549" width="1.3136%" height="15" fill="rgb(210,31,41)" fg:x="494362" fg:w="332025"/><text x="2.2058%" y="559.50"></text></g><g><title>&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator&gt;::fold (332,025 samples, 1.31%)</title><rect x="1.9558%" y="533" width="1.3136%" height="15" fill="rgb(221,200,47)" fg:x="494362" fg:w="332025"/><text x="2.2058%" y="543.50"></text></g><g><title>&lt;itertools::adaptors::multi_product::MultiProduct&lt;I&gt; as core::iter::traits::iterator::Iterator&gt;::next (384,852 samples, 1.52%)</title><rect x="3.2694%" y="405" width="1.5226%" height="15" fill="rgb(226,26,5)" fg:x="826387" fg:w="384852"/><text x="3.5194%" y="415.50"></text></g><g><title>&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (384,852 samples, 1.52%)</title><rect x="3.2694%" y="389" width="1.5226%" height="15" fill="rgb(249,33,26)" fg:x="826387" fg:w="384852"/><text x="3.5194%" y="399.50"></text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (1,099,452 samples, 4.35%)</title><rect x="3.2694%" y="437" width="4.3497%" height="15" fill="rgb(235,183,28)" fg:x="826387" fg:w="1099452"/><text x="3.5194%" y="447.50">rayon..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (1,099,452 samples, 4.35%)</title><rect x="3.2694%" y="421" width="4.3497%" height="15" fill="rgb(221,5,38)" fg:x="826387" fg:w="1099452"/><text x="3.5194%" y="431.50">rhomb..</text></g><g><title>alloc::vec::in_place_collect::&lt;impl alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt; for alloc::vec::Vec&lt;T&gt;&gt;::from_iter (714,600 samples, 2.83%)</title><rect x="4.7919%" y="405" width="2.8271%" height="15" fill="rgb(247,18,42)" fg:x="1211239" fg:w="714600"/><text x="5.0419%" y="415.50">al..</text></g><g><title>&lt;alloc::vec::into_iter::IntoIter&lt;T,A&gt; as core::iter::traits::iterator::Iterator&gt;::fold (714,600 samples, 2.83%)</title><rect x="4.7919%" y="389" width="2.8271%" height="15" fill="rgb(241,131,45)" fg:x="1211239" fg:w="714600"/><text x="5.0419%" y="399.50">&lt;a..</text></g><g><title>&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (714,600 samples, 2.83%)</title><rect x="4.7919%" y="373" width="2.8271%" height="15" fill="rgb(249,31,29)" fg:x="1211239" fg:w="714600"/><text x="5.0419%" y="383.50">&lt;a..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (2,321,978 samples, 9.19%)</title><rect x="3.2694%" y="453" width="9.1862%" height="15" fill="rgb(225,111,53)" fg:x="826387" fg:w="2321978"/><text x="3.5194%" y="463.50">rayon::iter::..</text></g><g><title>rayon_core::registry::in_worker (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="437" width="4.8366%" height="15" fill="rgb(238,160,17)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="447.50">rayon_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="421" width="4.8366%" height="15" fill="rgb(214,148,48)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="431.50">rayon_..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="405" width="4.8366%" height="15" fill="rgb(232,36,49)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="415.50">rayon:..</text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="389" width="4.8366%" height="15" fill="rgb(209,103,24)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="399.50">rayon:..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="373" width="4.8366%" height="15" fill="rgb(229,88,8)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="383.50">rhombi..</text></g><g><title>rayon::iter::extend::&lt;impl rayon::iter::ParallelExtend&lt;T&gt; for alloc::vec::Vec&lt;T&gt;&gt;::par_extend (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="357" width="4.8366%" height="15" fill="rgb(213,181,19)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="367.50">rayon:..</text></g><g><title>&lt;rayon::vec::IntoIter&lt;T&gt; as rayon::iter::ParallelIterator&gt;::drive_unindexed (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="341" width="4.8366%" height="15" fill="rgb(254,191,54)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="351.50">&lt;rayon..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="325" width="4.8366%" height="15" fill="rgb(241,83,37)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="335.50">rayon:..</text></g><g><title>rayon_core::registry::in_worker (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="309" width="4.8366%" height="15" fill="rgb(233,36,39)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="319.50">rayon_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="293" width="4.8366%" height="15" fill="rgb(226,3,54)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="303.50">rayon_..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="277" width="4.8366%" height="15" fill="rgb(245,192,40)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="287.50">rayon:..</text></g><g><title>rayon_core::registry::in_worker (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="261" width="4.8366%" height="15" fill="rgb(238,167,29)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="271.50">rayon_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="245" width="4.8366%" height="15" fill="rgb(232,182,51)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="255.50">rayon_..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="229" width="4.8366%" height="15" fill="rgb(231,60,39)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="239.50">rayon_..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="213" width="4.8366%" height="15" fill="rgb(208,69,12)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="223.50">rayon:..</text></g><g><title>rayon_core::registry::in_worker (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="197" width="4.8366%" height="15" fill="rgb(235,93,37)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="207.50">rayon_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="181" width="4.8366%" height="15" fill="rgb(213,116,39)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="191.50">rayon_..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="165" width="4.8366%" height="15" fill="rgb(222,207,29)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="175.50">rayon_..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="149" width="4.8366%" height="15" fill="rgb(206,96,30)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="159.50">rayon:..</text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="133" width="4.8366%" height="15" fill="rgb(218,138,4)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="143.50">rayon:..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="117" width="4.8366%" height="15" fill="rgb(250,191,14)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="127.50">rhombi..</text></g><g><title>&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="101" width="4.8366%" height="15" fill="rgb(239,60,40)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="111.50">&lt;alloc..</text></g><g><title>&lt;core::iter::adapters::map::Map&lt;I,F&gt; as core::iter::traits::iterator::Iterator&gt;::try_fold (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="85" width="4.8366%" height="15" fill="rgb(206,27,48)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="95.50">&lt;core:..</text></g><g><title>rhombic_strips::rhombic::layer_ok (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="69" width="4.8366%" height="15" fill="rgb(225,35,8)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="79.50">rhombi..</text></g><g><title>&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="53" width="4.8366%" height="15" fill="rgb(250,213,24)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="63.50">&lt;alloc..</text></g><g><title>malloc (1,222,526 samples, 4.84%)</title><rect x="7.6190%" y="37" width="4.8366%" height="15" fill="rgb(247,123,22)" fg:x="1925839" fg:w="1222526"/><text x="7.8690%" y="47.50">malloc</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (3,544,504 samples, 14.02%)</title><rect x="3.2694%" y="501" width="14.0228%" height="15" fill="rgb(231,138,38)" fg:x="826387" fg:w="3544504"/><text x="3.5194%" y="511.50">rayon::iter::plumbing..</text></g><g><title>rayon_core::registry::in_worker (3,544,504 samples, 14.02%)</title><rect x="3.2694%" y="485" width="14.0228%" height="15" fill="rgb(231,145,46)" fg:x="826387" fg:w="3544504"/><text x="3.5194%" y="495.50">rayon_core::registry:..</text></g><g><title>rayon_core::join::join_context::{{closure}} (3,544,504 samples, 14.02%)</title><rect x="3.2694%" y="469" width="14.0228%" height="15" fill="rgb(251,118,11)" fg:x="826387" fg:w="3544504"/><text x="3.5194%" y="479.50">rayon_core::join::joi..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="453" width="4.8366%" height="15" fill="rgb(217,147,25)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="463.50">rayon_..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="437" width="4.8366%" height="15" fill="rgb(247,81,37)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="447.50">rayon:..</text></g><g><title>rayon_core::registry::in_worker (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="421" width="4.8366%" height="15" fill="rgb(209,12,38)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="431.50">rayon_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="405" width="4.8366%" height="15" fill="rgb(227,1,9)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="415.50">rayon_..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="389" width="4.8366%" height="15" fill="rgb(248,47,43)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="399.50">rayon_..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="373" width="4.8366%" height="15" fill="rgb(221,10,30)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="383.50">rayon:..</text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="357" width="4.8366%" height="15" fill="rgb(210,229,1)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="367.50">rayon:..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="341" width="4.8366%" height="15" fill="rgb(222,148,37)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="351.50">rhombi..</text></g><g><title>&lt;alloc::vec::Vec&lt;T,A&gt; as core::clone::Clone&gt;::clone (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="325" width="4.8366%" height="15" fill="rgb(234,67,33)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="335.50">&lt;alloc..</text></g><g><title>&lt;alloc::vec::Vec&lt;T,A&gt; as core::clone::Clone&gt;::clone (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="309" width="4.8366%" height="15" fill="rgb(247,98,35)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="319.50">&lt;alloc..</text></g><g><title>malloc (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="293" width="4.8366%" height="15" fill="rgb(247,138,52)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="303.50">malloc</text></g><g><title>_int_malloc (1,222,526 samples, 4.84%)</title><rect x="12.4556%" y="277" width="4.8366%" height="15" fill="rgb(213,79,30)" fg:x="3148365" fg:w="1222526"/><text x="12.7056%" y="287.50">_int_m..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (4,780,945 samples, 18.91%)</title><rect x="3.2694%" y="549" width="18.9144%" height="15" fill="rgb(246,177,23)" fg:x="826387" fg:w="4780945"/><text x="3.5194%" y="559.50">rayon::iter::plumbing::bridge_..</text></g><g><title>rayon_core::registry::in_worker (4,780,945 samples, 18.91%)</title><rect x="3.2694%" y="533" width="18.9144%" height="15" fill="rgb(230,62,27)" fg:x="826387" fg:w="4780945"/><text x="3.5194%" y="543.50">rayon_core::registry::in_worker</text></g><g><title>rayon_core::join::join_context::{{closure}} (4,780,945 samples, 18.91%)</title><rect x="3.2694%" y="517" width="18.9144%" height="15" fill="rgb(216,154,8)" fg:x="826387" fg:w="4780945"/><text x="3.5194%" y="527.50">rayon_core::join::join_context..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="501" width="4.8916%" height="15" fill="rgb(244,35,45)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="511.50">rayon_..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="485" width="4.8916%" height="15" fill="rgb(251,115,12)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="495.50">rayon:..</text></g><g><title>rayon_core::registry::in_worker (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="469" width="4.8916%" height="15" fill="rgb(240,54,50)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="479.50">rayon_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="453" width="4.8916%" height="15" fill="rgb(233,84,52)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="463.50">rayon_..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="437" width="4.8916%" height="15" fill="rgb(207,117,47)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="447.50">rayon_..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="421" width="4.8916%" height="15" fill="rgb(249,43,39)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="431.50">rayon:..</text></g><g><title>rayon_core::registry::in_worker (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="405" width="4.8916%" height="15" fill="rgb(209,38,44)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="415.50">rayon_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="389" width="4.8916%" height="15" fill="rgb(236,212,23)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="399.50">rayon_..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="373" width="4.8916%" height="15" fill="rgb(242,79,21)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="383.50">rayon_..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="357" width="4.8916%" height="15" fill="rgb(211,96,35)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="367.50">rayon:..</text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="341" width="4.8916%" height="15" fill="rgb(253,215,40)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="351.50">rayon:..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="325" width="4.8916%" height="15" fill="rgb(211,81,21)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="335.50">rhombi..</text></g><g><title>alloc::vec::in_place_collect::&lt;impl alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt; for alloc::vec::Vec&lt;T&gt;&gt;::from_iter (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="309" width="4.8916%" height="15" fill="rgb(208,190,38)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="319.50">alloc:..</text></g><g><title>&lt;alloc::vec::into_iter::IntoIter&lt;T,A&gt; as core::iter::traits::iterator::Iterator&gt;::fold (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="293" width="4.8916%" height="15" fill="rgb(235,213,38)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="303.50">&lt;alloc..</text></g><g><title>&lt;alloc::vec::into_iter::IntoIter&lt;T,A&gt; as core::clone::Clone&gt;::clone (1,236,441 samples, 4.89%)</title><rect x="17.2921%" y="277" width="4.8916%" height="15" fill="rgb(237,122,38)" fg:x="4370891" fg:w="1236441"/><text x="17.5421%" y="287.50">&lt;alloc..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (3,404,242 samples, 13.47%)</title><rect x="22.1837%" y="485" width="13.4679%" height="15" fill="rgb(244,218,35)" fg:x="5607332" fg:w="3404242"/><text x="22.4337%" y="495.50">rayon::iter::plumbin..</text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (3,404,242 samples, 13.47%)</title><rect x="22.1837%" y="469" width="13.4679%" height="15" fill="rgb(240,68,47)" fg:x="5607332" fg:w="3404242"/><text x="22.4337%" y="479.50">rayon::iter::plumbin..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (3,404,242 samples, 13.47%)</title><rect x="22.1837%" y="453" width="13.4679%" height="15" fill="rgb(210,16,53)" fg:x="5607332" fg:w="3404242"/><text x="22.4337%" y="463.50">rhombic_strips::rhom..</text></g><g><title>alloc::vec::in_place_collect::&lt;impl alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt; for alloc::vec::Vec&lt;T&gt;&gt;::from_iter (3,404,242 samples, 13.47%)</title><rect x="22.1837%" y="437" width="13.4679%" height="15" fill="rgb(235,124,12)" fg:x="5607332" fg:w="3404242"/><text x="22.4337%" y="447.50">alloc::vec::in_place..</text></g><g><title>&lt;alloc::vec::into_iter::IntoIter&lt;T,A&gt; as core::iter::traits::iterator::Iterator&gt;::fold (3,404,242 samples, 13.47%)</title><rect x="22.1837%" y="421" width="13.4679%" height="15" fill="rgb(224,169,11)" fg:x="5607332" fg:w="3404242"/><text x="22.4337%" y="431.50">&lt;alloc::vec::into_it..</text></g><g><title>&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (3,404,242 samples, 13.47%)</title><rect x="22.1837%" y="405" width="13.4679%" height="15" fill="rgb(250,166,2)" fg:x="5607332" fg:w="3404242"/><text x="22.4337%" y="415.50">&lt;alloc::vec::Vec&lt;T&gt; ..</text></g><g><title>&lt;itertools::permutations::Permutations&lt;I&gt; as core::iter::traits::iterator::Iterator&gt;::next (3,404,242 samples, 13.47%)</title><rect x="22.1837%" y="389" width="13.4679%" height="15" fill="rgb(242,216,29)" fg:x="5607332" fg:w="3404242"/><text x="22.4337%" y="399.50">&lt;itertools::permutat..</text></g><g><title>malloc (3,404,242 samples, 13.47%)</title><rect x="22.1837%" y="373" width="13.4679%" height="15" fill="rgb(230,116,27)" fg:x="5607332" fg:w="3404242"/><text x="22.4337%" y="383.50">malloc</text></g><g><title>_int_malloc (3,404,242 samples, 13.47%)</title><rect x="22.1837%" y="357" width="13.4679%" height="15" fill="rgb(228,99,48)" fg:x="5607332" fg:w="3404242"/><text x="22.4337%" y="367.50">_int_malloc</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (10,160,487 samples, 40.20%)</title><rect x="1.9558%" y="597" width="40.1969%" height="15" fill="rgb(253,11,6)" fg:x="494362" fg:w="10160487"/><text x="2.2058%" y="607.50">rayon::iter::plumbing::bridge_producer_consumer::helper</text></g><g><title>rayon_core::registry::in_worker (9,828,462 samples, 38.88%)</title><rect x="3.2694%" y="581" width="38.8833%" height="15" fill="rgb(247,143,39)" fg:x="826387" fg:w="9828462"/><text x="3.5194%" y="591.50">rayon_core::registry::in_worker</text></g><g><title>rayon_core::join::join_context::{{closure}} (9,828,462 samples, 38.88%)</title><rect x="3.2694%" y="565" width="38.8833%" height="15" fill="rgb(236,97,10)" fg:x="826387" fg:w="9828462"/><text x="3.5194%" y="575.50">rayon_core::join::join_context::{{closure}}</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (5,047,517 samples, 19.97%)</title><rect x="22.1837%" y="549" width="19.9690%" height="15" fill="rgb(233,208,19)" fg:x="5607332" fg:w="5047517"/><text x="22.4337%" y="559.50">rayon_core::job::StackJob&lt;L,F,R..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (5,047,517 samples, 19.97%)</title><rect x="22.1837%" y="533" width="19.9690%" height="15" fill="rgb(216,164,2)" fg:x="5607332" fg:w="5047517"/><text x="22.4337%" y="543.50">rayon::iter::plumbing::bridge_p..</text></g><g><title>rayon_core::registry::in_worker (5,047,517 samples, 19.97%)</title><rect x="22.1837%" y="517" width="19.9690%" height="15" fill="rgb(220,129,5)" fg:x="5607332" fg:w="5047517"/><text x="22.4337%" y="527.50">rayon_core::registry::in_worker</text></g><g><title>rayon_core::join::join_context::{{closure}} (5,047,517 samples, 19.97%)</title><rect x="22.1837%" y="501" width="19.9690%" height="15" fill="rgb(242,17,10)" fg:x="5607332" fg:w="5047517"/><text x="22.4337%" y="511.50">rayon_core::join::join_context:..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="485" width="6.5011%" height="15" fill="rgb(242,107,0)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="495.50">rayon_cor..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="469" width="6.5011%" height="15" fill="rgb(251,28,31)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="479.50">rayon::it..</text></g><g><title>rayon_core::registry::in_worker (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="453" width="6.5011%" height="15" fill="rgb(233,223,10)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="463.50">rayon_cor..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="437" width="6.5011%" height="15" fill="rgb(215,21,27)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="447.50">rayon_cor..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="421" width="6.5011%" height="15" fill="rgb(232,23,21)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="431.50">rayon_cor..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="405" width="6.5011%" height="15" fill="rgb(244,5,23)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="415.50">rayon::it..</text></g><g><title>rayon_core::registry::in_worker (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="389" width="6.5011%" height="15" fill="rgb(226,81,46)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="399.50">rayon_cor..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="373" width="6.5011%" height="15" fill="rgb(247,70,30)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="383.50">rayon_cor..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="357" width="6.5011%" height="15" fill="rgb(212,68,19)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="367.50">rayon_cor..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="341" width="6.5011%" height="15" fill="rgb(240,187,13)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="351.50">rayon::it..</text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="325" width="6.5011%" height="15" fill="rgb(223,113,26)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="335.50">rayon::it..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="309" width="6.5011%" height="15" fill="rgb(206,192,2)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="319.50">rhombic_s..</text></g><g><title>alloc::raw_vec::RawVec&lt;T,A&gt;::grow_one (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="293" width="6.5011%" height="15" fill="rgb(241,108,4)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="303.50">alloc::ra..</text></g><g><title>alloc::raw_vec::finish_grow (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="277" width="6.5011%" height="15" fill="rgb(247,173,49)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="287.50">alloc::ra..</text></g><g><title>realloc (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="261" width="6.5011%" height="15" fill="rgb(224,114,35)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="271.50">realloc</text></g><g><title>_int_realloc (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="245" width="6.5011%" height="15" fill="rgb(245,159,27)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="255.50">_int_real..</text></g><g><title>_int_malloc (1,643,275 samples, 6.50%)</title><rect x="35.6516%" y="229" width="6.5011%" height="15" fill="rgb(245,172,44)" fg:x="9011574" fg:w="1643275"/><text x="35.9016%" y="239.50">_int_mall..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (12,155,296 samples, 48.09%)</title><rect x="1.2853%" y="645" width="48.0888%" height="15" fill="rgb(236,23,11)" fg:x="324879" fg:w="12155296"/><text x="1.5353%" y="655.50">rayon::iter::plumbing::bridge_producer_consumer::helper</text></g><g><title>rayon_core::registry::in_worker (11,985,813 samples, 47.42%)</title><rect x="1.9558%" y="629" width="47.4183%" height="15" fill="rgb(205,117,38)" fg:x="494362" fg:w="11985813"/><text x="2.2058%" y="639.50">rayon_core::registry::in_worker</text></g><g><title>rayon_core::join::join_context::{{closure}} (11,985,813 samples, 47.42%)</title><rect x="1.9558%" y="613" width="47.4183%" height="15" fill="rgb(237,72,25)" fg:x="494362" fg:w="11985813"/><text x="2.2058%" y="623.50">rayon_core::join::join_context::{{closure}}</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="597" width="7.2214%" height="15" fill="rgb(244,70,9)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="607.50">rayon_core..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="581" width="7.2214%" height="15" fill="rgb(217,125,39)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="591.50">rayon::ite..</text></g><g><title>rayon_core::registry::in_worker (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="565" width="7.2214%" height="15" fill="rgb(235,36,10)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="575.50">rayon_core..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="549" width="7.2214%" height="15" fill="rgb(251,123,47)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="559.50">rayon_core..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="533" width="7.2214%" height="15" fill="rgb(221,13,13)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="543.50">rayon::ite..</text></g><g><title>rayon_core::registry::in_worker (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="517" width="7.2214%" height="15" fill="rgb(238,131,9)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="527.50">rayon_core..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="501" width="7.2214%" height="15" fill="rgb(211,50,8)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="511.50">rayon_core..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="485" width="7.2214%" height="15" fill="rgb(245,182,24)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="495.50">rayon_core..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="469" width="7.2214%" height="15" fill="rgb(242,14,37)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="479.50">rayon::ite..</text></g><g><title>rayon_core::registry::in_worker (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="453" width="7.2214%" height="15" fill="rgb(246,228,12)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="463.50">rayon_core..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="437" width="7.2214%" height="15" fill="rgb(213,55,15)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="447.50">rayon_core..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="421" width="7.2214%" height="15" fill="rgb(209,9,3)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="431.50">rayon_core..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="405" width="7.2214%" height="15" fill="rgb(230,59,30)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="415.50">rayon::ite..</text></g><g><title>rayon_core::registry::in_worker (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="389" width="7.2214%" height="15" fill="rgb(209,121,21)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="399.50">rayon_core..</text></g><g><title>rayon_core::join::join_context::{{closure}} (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="373" width="7.2214%" height="15" fill="rgb(220,109,13)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="383.50">rayon_core..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="357" width="7.2214%" height="15" fill="rgb(232,18,1)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="367.50">rayon_core..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="341" width="7.2214%" height="15" fill="rgb(215,41,42)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="351.50">rayon::ite..</text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="325" width="7.2214%" height="15" fill="rgb(224,123,36)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="335.50">rayon::ite..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="309" width="7.2214%" height="15" fill="rgb(240,125,3)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="319.50">rhombic_st..</text></g><g><title>&lt;itertools::adaptors::multi_product::MultiProduct&lt;I&gt; as core::iter::traits::iterator::Iterator&gt;::next (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="293" width="7.2214%" height="15" fill="rgb(205,98,50)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="303.50">&lt;itertools..</text></g><g><title>&lt;alloc::vec::Vec&lt;T&gt; as alloc::vec::spec_from_iter::SpecFromIter&lt;T,I&gt;&gt;::from_iter (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="277" width="7.2214%" height="15" fill="rgb(205,185,37)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="287.50">&lt;alloc::ve..</text></g><g><title>alloc::raw_vec::RawVecInner&lt;A&gt;::reserve::do_reserve_and_handle (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="261" width="7.2214%" height="15" fill="rgb(238,207,15)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="271.50">alloc::raw..</text></g><g><title>alloc::raw_vec::finish_grow (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="245" width="7.2214%" height="15" fill="rgb(213,199,42)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="255.50">alloc::raw..</text></g><g><title>realloc (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="229" width="7.2214%" height="15" fill="rgb(235,201,11)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="239.50">realloc</text></g><g><title>_int_realloc (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="213" width="7.2214%" height="15" fill="rgb(207,46,11)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="223.50">_int_reall..</text></g><g><title>_int_malloc (1,825,326 samples, 7.22%)</title><rect x="42.1527%" y="197" width="7.2214%" height="15" fill="rgb(241,35,35)" fg:x="10654849" fg:w="1825326"/><text x="42.4027%" y="207.50">_int_malloc</text></g><g><title>&lt;rayon_core::job::StackJob&lt;L,F,R&gt; as rayon_core::job::Job&gt;::execute (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="629" width="16.4917%" height="15" fill="rgb(243,32,47)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="639.50">&lt;rayon_core::job::StackJo..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="613" width="16.4917%" height="15" fill="rgb(247,202,23)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="623.50">rayon::iter::plumbing::br..</text></g><g><title>rayon_core::registry::in_worker (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="597" width="16.4917%" height="15" fill="rgb(219,102,11)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="607.50">rayon_core::registry::in_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="581" width="16.4917%" height="15" fill="rgb(243,110,44)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="591.50">rayon_core::join::join_co..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="565" width="16.4917%" height="15" fill="rgb(222,74,54)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="575.50">rayon::iter::plumbing::br..</text></g><g><title>rayon_core::registry::in_worker (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="549" width="16.4917%" height="15" fill="rgb(216,99,12)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="559.50">rayon_core::registry::in_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="533" width="16.4917%" height="15" fill="rgb(226,22,26)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="543.50">rayon_core::join::join_co..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="517" width="16.4917%" height="15" fill="rgb(217,163,10)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="527.50">rayon::iter::plumbing::br..</text></g><g><title>rayon_core::registry::in_worker (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="501" width="16.4917%" height="15" fill="rgb(213,25,53)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="511.50">rayon_core::registry::in_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="485" width="16.4917%" height="15" fill="rgb(252,105,26)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="495.50">rayon_core::join::join_co..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="469" width="16.4917%" height="15" fill="rgb(220,39,43)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="479.50">rayon::iter::plumbing::br..</text></g><g><title>rayon_core::registry::in_worker (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="453" width="16.4917%" height="15" fill="rgb(229,68,48)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="463.50">rayon_core::registry::in_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="437" width="16.4917%" height="15" fill="rgb(252,8,32)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="447.50">rayon_core::join::join_co..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="421" width="16.4917%" height="15" fill="rgb(223,20,43)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="431.50">rayon::iter::plumbing::br..</text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="405" width="16.4917%" height="15" fill="rgb(229,81,49)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="415.50">rayon::iter::plumbing::Fo..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="389" width="16.4917%" height="15" fill="rgb(236,28,36)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="399.50">rhombic_strips::rhombic::..</text></g><g><title>rayon::iter::extend::&lt;impl rayon::iter::ParallelExtend&lt;T&gt; for alloc::vec::Vec&lt;T&gt;&gt;::par_extend (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="373" width="16.4917%" height="15" fill="rgb(249,185,26)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="383.50">rayon::iter::extend::&lt;imp..</text></g><g><title>&lt;rayon::vec::IntoIter&lt;T&gt; as rayon::iter::ParallelIterator&gt;::drive_unindexed (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="357" width="16.4917%" height="15" fill="rgb(249,174,33)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="367.50">&lt;rayon::vec::IntoIter&lt;T&gt; ..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="341" width="16.4917%" height="15" fill="rgb(233,201,37)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="351.50">rayon::iter::plumbing::br..</text></g><g><title>rayon_core::registry::in_worker (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="325" width="16.4917%" height="15" fill="rgb(221,78,26)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="335.50">rayon_core::registry::in_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="309" width="16.4917%" height="15" fill="rgb(250,127,30)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="319.50">rayon_core::join::join_co..</text></g><g><title>rayon_core::job::StackJob&lt;L,F,R&gt;::run_inline (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="293" width="16.4917%" height="15" fill="rgb(230,49,44)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="303.50">rayon_core::job::StackJob..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="277" width="16.4917%" height="15" fill="rgb(229,67,23)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="287.50">rayon::iter::plumbing::br..</text></g><g><title>rayon_core::registry::in_worker (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="261" width="16.4917%" height="15" fill="rgb(249,83,47)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="271.50">rayon_core::registry::in_..</text></g><g><title>rayon_core::join::join_context::{{closure}} (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="245" width="16.4917%" height="15" fill="rgb(215,43,3)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="255.50">rayon_core::join::join_co..</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="229" width="16.4917%" height="15" fill="rgb(238,154,13)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="239.50">rayon::iter::plumbing::br..</text></g><g><title>rayon::iter::plumbing::Folder::consume_iter (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="213" width="16.4917%" height="15" fill="rgb(219,56,2)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="223.50">rayon::iter::plumbing::Fo..</text></g><g><title>rhombic_strips::rhombic::rhombic_strips_dfs_simple (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="197" width="16.4917%" height="15" fill="rgb(233,0,4)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="207.50">rhombic_strips::rhombic::..</text></g><g><title>alloc::raw_vec::RawVec&lt;T,A&gt;::grow_one (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="181" width="16.4917%" height="15" fill="rgb(235,30,7)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="191.50">alloc::raw_vec::RawVec&lt;T,..</text></g><g><title>alloc::raw_vec::finish_grow (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="165" width="16.4917%" height="15" fill="rgb(250,79,13)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="175.50">alloc::raw_vec::finish_gr..</text></g><g><title>malloc (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="149" width="16.4917%" height="15" fill="rgb(211,146,34)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="159.50">malloc</text></g><g><title>_int_malloc (4,168,564 samples, 16.49%)</title><rect x="49.3741%" y="133" width="16.4917%" height="15" fill="rgb(228,22,38)" fg:x="12480175" fg:w="4168564"/><text x="49.6241%" y="143.50">_int_malloc</text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (16,644,929 samples, 65.85%)</title><rect x="0.0152%" y="693" width="65.8506%" height="15" fill="rgb(235,168,5)" fg:x="3842" fg:w="16644929"/><text x="0.2652%" y="703.50">rayon::iter::plumbing::bridge_producer_consumer::helper</text></g><g><title>rayon_core::registry::in_worker (16,323,892 samples, 64.58%)</title><rect x="1.2853%" y="677" width="64.5806%" height="15" fill="rgb(221,155,16)" fg:x="324879" fg:w="16323892"/><text x="1.5353%" y="687.50">rayon_core::registry::in_worker</text></g><g><title>rayon_core::join::join_context::{{closure}} (16,323,892 samples, 64.58%)</title><rect x="1.2853%" y="661" width="64.5806%" height="15" fill="rgb(215,215,53)" fg:x="324879" fg:w="16323892"/><text x="1.5353%" y="671.50">rayon_core::join::join_context::{{closure}}</text></g><g><title>rayon_core::registry::WorkerThread::wait_until_cold (4,168,596 samples, 16.49%)</title><rect x="49.3741%" y="645" width="16.4918%" height="15" fill="rgb(223,4,10)" fg:x="12480175" fg:w="4168596"/><text x="49.6241%" y="655.50">rayon_core::registry::Wor..</text></g><g><title>&lt;rayon_core::job::StackJob&lt;L,F,R&gt; as rayon_core::job::Job&gt;::execute (16,664,336 samples, 65.93%)</title><rect x="0.0152%" y="709" width="65.9274%" height="15" fill="rgb(234,103,6)" fg:x="3842" fg:w="16664336"/><text x="0.2652%" y="719.50">&lt;rayon_core::job::StackJob&lt;L,F,R&gt; as rayon_core::job::Job&gt;::execute</text></g><g><title>rayon_core::join::join_context::{{closure}} (19,407 samples, 0.08%)</title><rect x="65.8658%" y="693" width="0.0768%" height="15" fill="rgb(227,97,0)" fg:x="16648771" fg:w="19407"/><text x="66.1158%" y="703.50"></text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (19,407 samples, 0.08%)</title><rect x="65.8658%" y="677" width="0.0768%" height="15" fill="rgb(234,150,53)" fg:x="16648771" fg:w="19407"/><text x="66.1158%" y="687.50"></text></g><g><title>rayon_core::registry::in_worker (19,407 samples, 0.08%)</title><rect x="65.8658%" y="661" width="0.0768%" height="15" fill="rgb(228,201,54)" fg:x="16648771" fg:w="19407"/><text x="66.1158%" y="671.50"></text></g><g><title>rayon_core::join::join_context::{{closure}} (19,407 samples, 0.08%)</title><rect x="65.8658%" y="645" width="0.0768%" height="15" fill="rgb(222,22,37)" fg:x="16648771" fg:w="19407"/><text x="66.1158%" y="655.50"></text></g><g><title>rayon_core::registry::WorkerThread::wait_until_cold (19,407 samples, 0.08%)</title><rect x="65.8658%" y="629" width="0.0768%" height="15" fill="rgb(237,53,32)" fg:x="16648771" fg:w="19407"/><text x="66.1158%" y="639.50"></text></g><g><title>rayon_core::sleep::Sleep::wake_any_threads (19,407 samples, 0.08%)</title><rect x="65.8658%" y="613" width="0.0768%" height="15" fill="rgb(233,25,53)" fg:x="16648771" fg:w="19407"/><text x="66.1158%" y="623.50"></text></g><g><title>rayon_core::sleep::Sleep::wake_specific_thread (19,407 samples, 0.08%)</title><rect x="65.8658%" y="597" width="0.0768%" height="15" fill="rgb(210,40,34)" fg:x="16648771" fg:w="19407"/><text x="66.1158%" y="607.50"></text></g><g><title>&lt;core::iter::adapters::chain::Chain&lt;A,B&gt; as core::iter::traits::iterator::Iterator&gt;::try_fold (919,774 samples, 3.64%)</title><rect x="65.9864%" y="693" width="3.6388%" height="15" fill="rgb(241,220,44)" fg:x="16679246" fg:w="919774"/><text x="66.2364%" y="703.50">&lt;cor..</text></g><g><title>crossbeam_deque::deque::Stealer&lt;T&gt;::steal (886,457 samples, 3.51%)</title><rect x="66.1182%" y="677" width="3.5070%" height="15" fill="rgb(235,28,35)" fg:x="16712563" fg:w="886457"/><text x="66.3682%" y="687.50">cro..</text></g><g><title>crossbeam_epoch::default::with_handle (860,132 samples, 3.40%)</title><rect x="66.2224%" y="661" width="3.4029%" height="15" fill="rgb(210,56,17)" fg:x="16738888" fg:w="860132"/><text x="66.4724%" y="671.50">cro..</text></g><g><title>crossbeam_epoch::internal::Global::collect (779,436 samples, 3.08%)</title><rect x="66.5416%" y="645" width="3.0836%" height="15" fill="rgb(224,130,29)" fg:x="16819584" fg:w="779436"/><text x="66.7916%" y="655.50">cro..</text></g><g><title>crossbeam_epoch::internal::Global::try_advance (746,930 samples, 2.96%)</title><rect x="66.6702%" y="629" width="2.9550%" height="15" fill="rgb(235,212,8)" fg:x="16852090" fg:w="746930"/><text x="66.9202%" y="639.50">cro..</text></g><g><title>crossbeam_deque::deque::Stealer&lt;T&gt;::steal (90,277 samples, 0.36%)</title><rect x="69.6252%" y="693" width="0.3572%" height="15" fill="rgb(223,33,50)" fg:x="17599020" fg:w="90277"/><text x="69.8752%" y="703.50"></text></g><g><title>rayon_core::registry::WorkerThread::find_work (1,021,476 samples, 4.04%)</title><rect x="65.9426%" y="709" width="4.0412%" height="15" fill="rgb(219,149,13)" fg:x="16668180" fg:w="1021476"/><text x="66.1926%" y="719.50">rayo..</text></g><g><title>rayon_core::registry::WorkerThread::wait_until_cold (17,686,245 samples, 69.97%)</title><rect x="0.0143%" y="725" width="69.9703%" height="15" fill="rgb(250,156,29)" fg:x="3609" fg:w="17686245"/><text x="0.2643%" y="735.50">rayon_core::registry::WorkerThread::wait_until_cold</text></g><g><title>core::ops::function::FnOnce::call_once{{vtable.shim}} (17,686,271 samples, 69.97%)</title><rect x="0.0143%" y="773" width="69.9704%" height="15" fill="rgb(216,193,19)" fg:x="3609" fg:w="17686271"/><text x="0.2643%" y="783.50">core::ops::function::FnOnce::call_once{{vtable.shim}}</text></g><g><title>std::sys::backtrace::__rust_begin_short_backtrace (17,686,271 samples, 69.97%)</title><rect x="0.0143%" y="757" width="69.9704%" height="15" fill="rgb(216,135,14)" fg:x="3609" fg:w="17686271"/><text x="0.2643%" y="767.50">std::sys::backtrace::__rust_begin_short_backtrace</text></g><g><title>rayon_core::registry::ThreadBuilder::run (17,686,271 samples, 69.97%)</title><rect x="0.0143%" y="741" width="69.9704%" height="15" fill="rgb(241,47,5)" fg:x="3609" fg:w="17686271"/><text x="0.2643%" y="751.50">rayon_core::registry::ThreadBuilder::run</text></g><g><title>_int_malloc (7,912 samples, 0.03%)</title><rect x="70.0167%" y="709" width="0.0313%" height="15" fill="rgb(233,42,35)" fg:x="17697972" fg:w="7912"/><text x="70.2667%" y="719.50"></text></g><g><title>malloc (23,690 samples, 0.09%)</title><rect x="69.9847%" y="741" width="0.0937%" height="15" fill="rgb(231,13,6)" fg:x="17689880" fg:w="23690"/><text x="70.2347%" y="751.50"></text></g><g><title>tcache_init.part.0 (15,598 samples, 0.06%)</title><rect x="70.0167%" y="725" width="0.0617%" height="15" fill="rgb(207,181,40)" fg:x="17697972" fg:w="15598"/><text x="70.2667%" y="735.50"></text></g><g><title>arena_get2.part.0 (7,686 samples, 0.03%)</title><rect x="70.0480%" y="709" width="0.0304%" height="15" fill="rgb(254,173,49)" fg:x="17705884" fg:w="7686"/><text x="70.2980%" y="719.50"></text></g><g><title>__GI___clone3 (17,721,996 samples, 70.11%)</title><rect x="0.0001%" y="821" width="70.1117%" height="15" fill="rgb(221,1,38)" fg:x="14" fg:w="17721996"/><text x="0.2501%" y="831.50">__GI___clone3</text></g><g><title>start_thread (17,721,996 samples, 70.11%)</title><rect x="0.0001%" y="805" width="70.1117%" height="15" fill="rgb(206,124,46)" fg:x="14" fg:w="17721996"/><text x="0.2501%" y="815.50">start_thread</text></g><g><title>std::sys::thread::unix::Thread::new::thread_start (17,718,401 samples, 70.10%)</title><rect x="0.0143%" y="789" width="70.0975%" height="15" fill="rgb(249,21,11)" fg:x="3609" fg:w="17718401"/><text x="0.2643%" y="799.50">std::sys::thread::unix::Thread::new::thread_start</text></g><g><title>std::sys::pal::unix::stack_overflow::imp::make_handler (32,130 samples, 0.13%)</title><rect x="69.9847%" y="773" width="0.1271%" height="15" fill="rgb(222,201,40)" fg:x="17689880" fg:w="32130"/><text x="70.2347%" y="783.50"></text></g><g><title>pthread_getattr_np@@GLIBC_2.32 (32,130 samples, 0.13%)</title><rect x="69.9847%" y="757" width="0.1271%" height="15" fill="rgb(235,61,29)" fg:x="17689880" fg:w="32130"/><text x="70.2347%" y="767.50"></text></g><g><title>pthread_attr_setaffinity_np@@GLIBC_2.32 (8,440 samples, 0.03%)</title><rect x="70.0784%" y="741" width="0.0334%" height="15" fill="rgb(219,207,3)" fg:x="17713570" fg:w="8440"/><text x="70.3284%" y="751.50"></text></g><g><title>__pthread_attr_extension (8,440 samples, 0.03%)</title><rect x="70.0784%" y="725" width="0.0334%" height="15" fill="rgb(222,56,46)" fg:x="17713570" fg:w="8440"/><text x="70.3284%" y="735.50"></text></g><g><title>__libc_calloc (8,440 samples, 0.03%)</title><rect x="70.0784%" y="709" width="0.0334%" height="15" fill="rgb(239,76,54)" fg:x="17713570" fg:w="8440"/><text x="70.3284%" y="719.50"></text></g><g><title>__printf_buffer (3,941 samples, 0.02%)</title><rect x="70.1118%" y="821" width="0.0156%" height="15" fill="rgb(231,124,27)" fg:x="17722010" fg:w="3941"/><text x="70.3618%" y="831.50"></text></g><g><title>__printf_buffer_write (3,941 samples, 0.02%)</title><rect x="70.1118%" y="805" width="0.0156%" height="15" fill="rgb(249,195,6)" fg:x="17722010" fg:w="3941"/><text x="70.3618%" y="815.50"></text></g><g><title>_dl_sysdep_parse_arguments (4,135 samples, 0.02%)</title><rect x="70.1305%" y="757" width="0.0164%" height="15" fill="rgb(237,174,47)" fg:x="17726750" fg:w="4135"/><text x="70.3805%" y="767.50"></text></g><g><title>_start (114,593 samples, 0.45%)</title><rect x="70.1274%" y="821" width="0.4534%" height="15" fill="rgb(206,201,31)" fg:x="17725951" fg:w="114593"/><text x="70.3774%" y="831.50"></text></g><g><title>_dl_start (114,054 samples, 0.45%)</title><rect x="70.1295%" y="805" width="0.4512%" height="15" fill="rgb(231,57,52)" fg:x="17726490" fg:w="114054"/><text x="70.3795%" y="815.50"></text></g><g><title>_dl_start_final (113,794 samples, 0.45%)</title><rect x="70.1305%" y="789" width="0.4502%" height="15" fill="rgb(248,177,22)" fg:x="17726750" fg:w="113794"/><text x="70.3805%" y="799.50"></text></g><g><title>_dl_sysdep_start (113,794 samples, 0.45%)</title><rect x="70.1305%" y="773" width="0.4502%" height="15" fill="rgb(215,211,37)" fg:x="17726750" fg:w="113794"/><text x="70.3805%" y="783.50"></text></g><g><title>dl_main (109,659 samples, 0.43%)</title><rect x="70.1469%" y="757" width="0.4338%" height="15" fill="rgb(241,128,51)" fg:x="17730885" fg:w="109659"/><text x="70.3969%" y="767.50"></text></g><g><title>_dl_receive_error (109,659 samples, 0.43%)</title><rect x="70.1469%" y="741" width="0.4338%" height="15" fill="rgb(227,165,31)" fg:x="17730885" fg:w="109659"/><text x="70.3969%" y="751.50"></text></g><g><title>version_check_doit (109,659 samples, 0.43%)</title><rect x="70.1469%" y="725" width="0.4338%" height="15" fill="rgb(228,167,24)" fg:x="17730885" fg:w="109659"/><text x="70.3969%" y="735.50"></text></g><g><title>_dl_check_all_versions (109,659 samples, 0.43%)</title><rect x="70.1469%" y="709" width="0.4338%" height="15" fill="rgb(228,143,12)" fg:x="17730885" fg:w="109659"/><text x="70.3969%" y="719.50"></text></g><g><title>_dl_check_map_versions (109,659 samples, 0.43%)</title><rect x="70.1469%" y="693" width="0.4338%" height="15" fill="rgb(249,149,8)" fg:x="17730885" fg:w="109659"/><text x="70.3969%" y="703.50"></text></g><g><title>match_symbol (109,659 samples, 0.43%)</title><rect x="70.1469%" y="677" width="0.4338%" height="15" fill="rgb(243,35,44)" fg:x="17730885" fg:w="109659"/><text x="70.3969%" y="687.50"></text></g><g><title>crossbeam_deque::deque::Stealer&lt;T&gt;::steal (33,084 samples, 0.13%)</title><rect x="70.5807%" y="821" width="0.1309%" height="15" fill="rgb(246,89,9)" fg:x="17840544" fg:w="33084"/><text x="70.8307%" y="831.50"></text></g><g><title>rayon::iter::plumbing::bridge_producer_consumer::helper (7,403,136 samples, 29.29%)</title><rect x="70.7116%" y="821" width="29.2883%" height="15" fill="rgb(233,213,13)" fg:x="17873628" fg:w="7403136"/><text x="70.9616%" y="831.50">rayon::iter::plumbing::bridge_producer_consumer..</text></g><g><title>rayon_core::registry::in_worker (7,403,136 samples, 29.29%)</title><rect x="70.7116%" y="805" width="29.2883%" height="15" fill="rgb(233,141,41)" fg:x="17873628" fg:w="7403136"/><text x="70.9616%" y="815.50">rayon_core::registry::in_worker</text></g><g><title>rayon_core::join::join_context::{{closure}} (7,403,136 samples, 29.29%)</title><rect x="70.7116%" y="789" width="29.2883%" height="15" fill="rgb(239,167,4)" fg:x="17873628" fg:w="7403136"/><text x="70.9616%" y="799.50">rayon_core::join::join_context::{{closure}}</text></g><g><title>rayon_core::registry::WorkerThread::wait_until_cold (7,403,136 samples, 29.29%)</title><rect x="70.7116%" y="773" width="29.2883%" height="15" fill="rgb(209,217,16)" fg:x="17873628" fg:w="7403136"/><text x="70.9616%" y="783.50">rayon_core::registry::WorkerThread::wait_until_..</text></g><g><title>__sched_yield (7,403,136 samples, 29.29%)</title><rect x="70.7116%" y="757" width="29.2883%" height="15" fill="rgb(219,88,35)" fg:x="17873628" fg:w="7403136"/><text x="70.9616%" y="767.50">__sched_yield</text></g><g><title>[unknown] (7,403,136 samples, 29.29%)</title><rect x="70.7116%" y="741" width="29.2883%" height="15" fill="rgb(220,193,23)" fg:x="17873628" fg:w="7403136"/><text x="70.9616%" y="751.50">[unknown]</text></g><g><title>all (25,276,789 samples, 100%)</title><rect x="0.0000%" y="853" width="100.0000%" height="15" fill="rgb(230,90,52)" fg:x="0" fg:w="25276789"/><text x="0.2500%" y="863.50"></text></g><g><title>rhombic_strips (25,276,789 samples, 100.00%)</title><rect x="0.0000%" y="837" width="100.0000%" height="15" fill="rgb(252,106,19)" fg:x="0" fg:w="25276789"/><text x="0.2500%" y="847.50">rhombic_strips</text></g></svg></svg>

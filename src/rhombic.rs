@@ -4,351 +4,183 @@ use crate::lattice::*;
 use std::cmp;
 use rayon::prelude::*;
 use itertools::Itertools;
+use petgraph::graph::{Graph, NodeIndex};
+use petgraph::Undirected;
+use rustsat::{
+    solvers::{Solve, SolveIncremental, SolverResult, SolveStats}, // SolveIncremental hinzugefügt
+    types::{Clause, Lit, TernaryVal}, // TernaryVal statt LitValue
+};
+use rustsat_cadical::CaDiCaL;
 
-/*
-                        def orbit(c):
-                        return [c[i:]+c[:i] for i in range(len(c))]
-
-                        def reduced(c):
-                        if c[0] < c[-1] - 1:
-                            c[0], c[-1] = c[-1], c[0]
-                            return reduced(c)
-                            for i in range(len(c)-1):
-                                if c[i] > c[i+1] + 1:
-                                    c[i], c[i+1] = c[i+1], c[i]
-                                    return reduced(c)
-                                    n = max(c) + 1
-                                    return tuple(max(orbit(c), key=lambda x: sum([k*n**i for i,k in enumerate(x)])))*/
-
-
-
-fn min_max(a: usize, b: usize) -> (usize, usize) {
-    return (cmp::min(a,b), cmp::max(a,b))
-}
-
-fn is_good_for_path(indices: &Vec<usize>) -> bool {
-    if indices.len() == 0 { return false };
-    return indices.len() == indices.last().unwrap() - indices[0] + 1
-}
-
-fn is_good_for_cycle(indices: &Vec<usize>, n: usize) -> bool {
-    if !indices.contains(&0)|| !indices.contains(&(n-1)) { return is_good_for_path(indices) }
-    let mut found_break = false;
-    for i in 0..indices.len()-1 {
-        if indices[i+1] != indices[i] + 1 {
-            if found_break { return false };
-                found_break = true;
-        }
+// given a graph, uses CaDiCaL to find all Hamilton cycles in this graph
+pub fn all_ham_cycles(graph: &Graph<usize, (), Undirected>) -> Vec<Vec<usize>> {
+    let node_count = graph.node_count();
+    
+    // Trivial cases
+    if node_count == 0 {
+        return vec![];
     }
-    true
-}
 
-fn layer_ok(layer: &Vec<usize>) -> bool { //returns wether the list of bridges is ok, i.e. each face appears in an interval along it
-    for face in layer {
-        if !is_good_for_cycle(&(0..layer.len()).filter(|x| layer[*x] == *face).collect(), layer.len()) {
-            return false
+    let mut solver = CaDiCaL::default();
+
+    // Variable mapping:
+    // We need variables x_{v, i} representing "Vertex v is at position i in the path".
+    // We map these to a linear variable index: var = v * node_count + i
+    
+    // helper to create a literal for x_{v, i}
+    let var_for = |v_idx: usize, pos_idx: usize| -> Lit {
+        let var_idx = v_idx * node_count + pos_idx;
+        Lit::positive(var_idx as u32)
+    };
+
+    // 1. Each position i must be occupied by at least one vertex
+    for i in 0..node_count {
+        let mut clause = Clause::new();
+        for v in 0..node_count {
+            clause.add(var_for(v, i));
         }
+        solver.add_clause(clause);
     }
-    true
-}
 
-fn replace_by_permutations(v: Vec<usize>) -> Vec<Vec<usize>> {
-    let n = v.len();
-    v.into_iter().permutations(n).collect()
-}
-
-fn gap_assignments_simple(gaps: &Vec<Vec<usize>>, faces: &Vec<usize>) -> Vec<Vec<Vec<usize>>>{
-    let n = gaps.len();
-    let mut active = vec![vec![vec![]; n]];
-    let mut new: Vec<Vec<Vec<usize>>> = vec![];
-    for face in faces.into_iter() {
-        for assignment in active.iter() {
-            for i in (0..n).filter(|i| gaps[*i].contains(&face)).into_iter() {
-                let mut new_assignment: Vec<Vec<usize>> = assignment.clone();
-                new_assignment[i].push(*face);
-                new.push(new_assignment);
+    // 2. Each position i must be occupied by at most one vertex
+    for i in 0..node_count {
+        for v in 0..node_count {
+            for w in (v + 1)..node_count {
+                solver.add_clause(Clause::from_iter([
+                    !var_for(v, i), 
+                    !var_for(w, i)
+                ]));
             }
         }
-        active = new.clone();
-        new.clear();
     }
-    let mut res = vec![];
-    for a in active.into_iter() {
-        for choice in a.into_iter().map(|x| replace_by_permutations(x)).multi_cartesian_product() {
-            res.push(choice);
+
+    // 3. Each vertex v must appear at least once in the cycle
+    for v in 0..node_count {
+        let mut clause = Clause::new();
+        for i in 0..node_count {
+            clause.add(var_for(v, i));
+        }
+        solver.add_clause(clause);
+    }
+
+    // 4. Each vertex v must appear at most once in the cycle
+    for v in 0..node_count {
+        for i in 0..node_count {
+            for j in (i + 1)..node_count {
+                solver.add_clause(Clause::from_iter([
+                    !var_for(v, i), 
+                    !var_for(v, j)
+                ]));
+            }
         }
     }
-    res
-}
 
-fn combine_to_layer(bridges: &Vec<usize>, gaps: &Vec<Vec<usize>>) -> Vec<usize> {
-    let mut layer = vec![];
-    for i in 0..bridges.len() {
-        for elem in gaps[i].iter() {
-            layer.push(*elem);
+    // 5. Adjacency constraints (The cycle must follow edges)
+    // We collect indices first to ensure stable mapping between v_idx (0..N) and graph nodes
+    let node_indices: Vec<_> = graph.node_indices().collect();
+
+    for (v_idx, &node_idx) in node_indices.iter().enumerate() {
+        let neighbors: Vec<_> = graph.neighbors(node_idx).collect();
+        
+        for i in 0..node_count {
+            let next_i = (i + 1) % node_count;
+            
+            let mut clause = Clause::new();
+            
+            // If v is at i...
+            clause.add(!var_for(v_idx, i));
+
+            // ...then one of the neighbors must be at i+1
+            for neighbor_node_idx in &neighbors {
+                if let Some(neighbor_v_idx) = node_indices.iter().position(|n| n == neighbor_node_idx) {
+                    clause.add(var_for(neighbor_v_idx, next_i));
+                }
+            }
+            
+            solver.add_clause(clause);
         }
-        layer.push(bridges[i]);
     }
-    layer
-}
 
-fn duplicates_removed(v: Vec<usize>) -> Vec<usize> {
-    let mut res = vec![v[0]];
-    for i in 1..v.len() {
-        if v[i-1] != v[i] && v[i] != v[0] {
-            res.push(v[i]);
+    let mut ham_cycles = Vec::new();
+    loop {
+        let solve_start = Instant::now();
+        let result = solver.solve().expect("Solver error");
+
+        match result {
+            SolverResult::Sat => {
+                let sol = solver.full_solution().unwrap();
+                let mut ham_cycle = Vec::new();
+
+                // Incremental: Block the found solution to find the next one
+                // We construct the negation of the current solution vector
+                let mut blocking_clause = Clause::new();
+                for i in 0..node_count {
+                    for v in 0..node_count {
+                        let lit = var_for(v, i);
+                        // If the variable was true in the model, add its negation to the clause
+                        if sol[lit.var()] == TernaryVal::True {
+                            blocking_clause.add(!lit);
+                            ham_cycle.push(v);
+                        }
+                    }
+                }
+                solver.add_clause(blocking_clause);
+                ham_cycles-push(ham_cycle);
+            },
+            SolverResult::Unsat => {
+                break;
+            },
+            SolverResult::Interrupted => {
+                panic!("Solver got interruped");
+            }
         }
     }
-    res
+    ham_cycles
 }
 
-//          Indices for the next_layers function:
-//
-//  indices:        0    1    2    3    4
-//                  |    |    |    |    |
-//  last_layer:     a    b    c    d    e
-//                    /    /    /    /    /
-//                   /    /    /    /    /
-//  bridges:        a    b    c    d    e
-//                \    \    \    \    \
-//                 \    \    \    \    \
-//  gaps:           a    b    c    d    e
-//                  |    |    |    |    |
-//  indices:        0    1    2    3    4
+// constructs the graph for each level and then calls all_ham_cycles on this graph
+// we connect x and y of the same level if and only if they have a bridge above and below
+fn ham_cycles_levels(l: &Lattice) -> Vec<Vec<Vec<usize>>> { // Vec over evels < Vec over ham cycles < vec over vertices of cycle
+    let num_levels = l.levels.len();
+    let mut ret = Vec::new();
 
-pub fn next_layers_simple(last_layer: &Vec<usize>, l: &Lattice) -> Vec<Vec<usize>> {
-    //println!("{:?}", last_layer.clone().into_iter().map(|i| l.faces[i].label.clone()).collect::<Vec<_>>());
-    let dim = l.faces[last_layer[0]].dim;
-    let n = last_layer.len();
-    let bridges: Vec<_> = (0..n).map(|x| l.bridges[&min_max(last_layer[x], last_layer[(x+1)%n])]).collect();
-    if !layer_ok(&bridges) { return vec![] };
-    let faces_left: &Vec<_> = &l.levels[dim+1].clone().into_iter().filter(|x| !bridges.contains(x)).collect();
-    let gaps: Vec<_> = (0..n).map(|i| l.faces[last_layer[i]].upset.clone().into_iter().filter(|x| !bridges.contains(x)).collect::<Vec<_>>()).collect();
-
-    gap_assignments_simple(&gaps, &faces_left)
-        .iter()
-        .map(|x| combine_to_layer(&bridges, x))
-        .filter(|x| layer_ok(x))
-        .map(|x| duplicates_removed(x))
-        .collect()
-}
-
-pub fn rhombic_strips_dfs_simple(strip: Vec<Vec<usize>>, l: &Lattice, max_dim: usize) -> Vec<Vec<Vec<usize>>> {
-
-    if max_dim == strip.len()-1 {
-        //println!("{:?}", strip);
-        return vec![strip];
-
-    };
-    let mut continuations = vec![];
-
-    for next_layer in next_layers_simple(&strip[strip.len()-1], l).into_iter() {
-        let mut new_strip = strip.clone();
-        new_strip.push(next_layer);
-        continuations.push(new_strip);
+    for (i, level) in l.levels.into_iter().enumerate() {
+        // build the graph
+        let graph = Graph::new_undirected();
+        // add vertices
+        for x in level {
+            graph.add_node(x);
+        }
+        // add edges between x and y if they have a bridge in the layer above and in the layer below
+        for x in level {
+            for y in level {
+                if (i == num_levels || l.bridges_above.contains_key((x, y))) && (i == 0 || l.bridges_below.contains_key((x, y))) {
+                    graph.add_edge(x, y, ());
+                }
+            }
+        }
+        ret.push(all_ham_cycles(&graph));
     }
-    continuations.into_par_iter().map(|x| rhombic_strips_dfs_simple(x, l, max_dim)).flatten().collect()
+    ret
 }
 
+// is s1 a subsequence of s2?
+fn is_subsequence(s1: &Vec<usize>, s2: &Vec<usize>) -> bool {
+    let mut p = 0; // pointer into s2
 
+    for &x in s1 {
+        while p < s2.len() && s2[p] != x {
+            p += 1;
+        }
+        if p == s2.len() {
+            return false;
+        }
+        p += 1;
+    }
 
+    true
+}
 
-
-
-
-
-
-
-
-// struct GapAssignments {
-//     gaps: Vec<Vec<Vec<usize>>>,
-//     num_faces: usize,
-//     counter: Vec<usize>,
-//     seen_zero: bool, //dirty, find a better way
-// }
-//
-// //Gap_assignment needs alg X, else it is too slow
-//
-// impl GapAssignments {
-//
-//     fn advance_counter(&mut self, full_until: usize) -> bool { //return false if there was an overflow, else true
-//         if full_until >= self.gaps.len() { return false };
-//         if self.counter[full_until] == self.gaps[full_until].len()-1 { return self.advance_counter(full_until+1) };
-//         self.counter[full_until] += 1;
-//         for i in 0..full_until {
-//             self.counter[i] = 0;
-//         }
-//         true
-//     }
-//
-//     fn next(&mut self) -> usize { //0: no success, 1: success, 2: done
-//         if self.seen_zero {
-//             if !self.advance_counter(0) {
-//                 return 2;
-//             };
-//         };
-//         self.seen_zero = true;
-//         let mut all_seen = vec![];
-//         let assignment: Vec<_> = (0..self.gaps.len()).map(|x| self.gaps[x][self.counter[x]].clone()).collect();  //this clone might be avoidable
-//         for g in assignment.iter() {
-//             for elem in g.iter() {
-//                 if all_seen.contains(elem) {
-//                     return 0;
-//                 };
-//                 all_seen.push(*elem);
-//             }
-//         }
-//         if all_seen.len() != self.num_faces {
-//             return 0;
-//         }
-//         1
-//     }
-//
-// }
-
-// pub fn test_GapAssignments() {
-//     let mut g = GapAssignments {
-//         gaps: vec![vec![vec![1,2,3], vec![1], vec![2]], vec![vec![1], vec![2], vec![3]], vec![vec![1], vec![3]]],
-//         all_faces: vec![],
-//         counter: vec![0,0,0],
-//     };
-//     while g.next() {
-//         println!("{:?}", g.counter);
-//     }
-// }
-
-// fn min_one_mod_n(i: &usize, n: &usize) -> usize {
-//     match i {
-//         0 => { n-1 },
-//         _ => { i-1 },
-//     }
-// }
-
-
-
-
-
-
-
-// //try dfs for this, might be faster
-// fn gap_assignments_non_simple(gap: &Vec<usize>, start: usize, end: usize, l: &Lattice) -> Vec<Vec<usize>>{
-//     //all possible paths across this gap as a vector. The graph is encoded in the lattice as the keys of the bridges object
-//
-//     if gap.len() == 0 { return vec![vec![]]; };
-//     if start == end { return vec![vec![]] };
-//
-//     let g: Vec<usize> = gap.into_iter().map(|x| x.clone()).collect();
-//     let mut result: Vec<Vec<usize>> = vec![];
-//     if l.bridges.contains_key(&min_max(start, end)) { result.push(vec![]); };
-//
-//     let mut active: Vec<Vec<usize>> = g.clone().into_iter().filter(|x| l.bridges.contains_key(&min_max(start, *x))).map(|x| vec![x]).collect();
-//     let mut new = vec![];
-//
-//     while active.len() != 0 {
-//         new.clear();
-//         for path in active.into_iter() {
-//             let p_head = path[path.len()-1];
-//             if l.bridges.contains_key(&min_max(p_head, end)) {
-//                 result.push(path.clone());
-//             }
-//             for face in g.iter() {
-//                 if !path.contains(face) && l.bridges.contains_key(&min_max(p_head, *face)) {
-//                     let mut new_path = path.clone();
-//                     new_path.push(*face);
-//                     new.push(new_path);
-//                 }
-//             }
-//         }
-//         active = new.clone();
-//     }
-//     result
-// }
-
-
-
-
-// pub fn next_layers_non_simple(last_layer: &Vec<usize>, l: &Lattice) -> Vec<Vec<usize>> {
-//     let dim = l.faces[last_layer[0]].dim;
-//     let n = last_layer.len();
-//     let bridges_option: Vec<_> = (0..n).map(|x| l.bridges[&min_max(last_layer[x], last_layer[(x+1)%n])]).collect();
-//     let mut bridges = vec![0; n];
-//     for i in 0..n {
-//         if !bridges_option[i].is_none() {
-//             let mut last_bridge = bridges_option[i].unwrap();
-//             for j in 0..n {
-//                 if bridges_option[(i+j)%n].is_none() {
-//                     bridges[(i+j)%n] = last_bridge;
-//                 } else {
-//                     last_bridge = bridges_option[(i+j)%n].unwrap();
-//                     bridges[(i+j)%n] = last_bridge;
-//
-//                 }
-//             }
-//             break
-//         }
-//     }
-//     if !layer_ok(&bridges) { return vec![] };
-//     //let faces_left: Vec<_> = <Vec<usize> as Clone>::clone(&l.levels[dim+1]).into_iter().filter(|x| !bridges.contains(x)).collect();
-//     let gaps: Vec<_> = (0..n).map(|i| l.faces[last_layer[i]].upset.clone().into_iter().filter(|x| !bridges.contains(x)).collect::<Vec<_>>()).collect();
-//     let assignments: Vec<Vec<Vec<usize>>> = (0..n).map(|i| gap_assignments_non_simple(&gaps[i], bridges[min_one_mod_n(&i, &n)], bridges[i], l)).collect::<Vec<_>>();
-//
-//     // println!("{:?}", gaps);
-//     // println!("{:?}", assignments);
-//
-//     let mut g = GapAssignments {
-//         gaps: assignments,
-//         num_faces: l.levels[dim+1].iter().filter(|x| !bridges.contains(x)).collect::<Vec<_>>().len(),
-//         counter: vec![0; last_layer.len()],
-//         seen_zero: false,
-//     };
-//     let mut layers = vec![];
-//
-//     loop {
-//         match g.next() {
-//             0 => (),
-//             1 => layers.push(combine_to_layer(&bridges, &(0..g.gaps.len()).map(|x| g.gaps[x][g.counter[x]].clone()).collect::<Vec<_>>())),
-//             _ => break,
-//         }
-//     }
-//     layers
-// }
-//
-// pub fn rhombic_strips_dfs_non_simple(strip: Vec<Vec<usize>>, l: &Lattice, max_dim: usize) -> Vec<Vec<Vec<usize>>> {
-//
-//     //if strips.len() == 0 { return vec![] };
-//     if max_dim == strip.len()-1 { return vec![strip] };
-//     let mut continuations = vec![];
-//
-//     for next_layer in next_layers_non_simple(&strip[strip.len()-1], l).into_iter() {
-//         let mut new_strip = strip.clone();
-//         new_strip.push(next_layer);
-//         continuations.push(new_strip);
-//     }
-//     continuations.into_par_iter().map(|x| rhombic_strips_dfs_non_simple(x, l, max_dim)).flatten().collect()
-// }
-//
-//
-//
-//
-//
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+pub fn rhombic_strips_simple(l: &Lattice, find_all: bool) -> Vec<Vec<Vec<usize>>> {
+    unimplemented!()
+}
