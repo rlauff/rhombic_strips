@@ -12,8 +12,8 @@ use rustsat::{
 };
 use rustsat_cadical::CaDiCaL;
 
-// given a graph, uses CaDiCaL to find all Hamilton cycles in this graph
-pub fn all_ham_cycles(graph: &Graph<usize, (), Undirected>) -> Vec<Vec<usize>> {
+// given a graph, uses CaDiCaL to find all Hamilton paths in this graph. 
+pub fn all_ham_paths(graph: &Graph<usize, (), Undirected>, restrict_to_cycles: bool) -> Vec<Vec<usize>> {
     let node_count = graph.node_count();
     
     // Trivial cases
@@ -54,7 +54,7 @@ pub fn all_ham_cycles(graph: &Graph<usize, (), Undirected>) -> Vec<Vec<usize>> {
         }
     }
 
-    // 3. Each vertex v must appear at least once in the cycle
+    // 3. Each vertex v must appear at least once in the path
     for v in 0..node_count {
         let mut clause = Clause::new();
         for i in 0..node_count {
@@ -63,7 +63,7 @@ pub fn all_ham_cycles(graph: &Graph<usize, (), Undirected>) -> Vec<Vec<usize>> {
         solver.add_clause(clause);
     }
 
-    // 4. Each vertex v must appear at most once in the cycle
+    // 4. Each vertex v must appear at most once in the path
     for v in 0..node_count {
         for i in 0..node_count {
             for j in (i + 1)..node_count {
@@ -75,7 +75,7 @@ pub fn all_ham_cycles(graph: &Graph<usize, (), Undirected>) -> Vec<Vec<usize>> {
         }
     }
 
-    // 5. Adjacency constraints (The cycle must follow edges)
+    // 5. Adjacency constraints (The path/cycle must follow edges)
     // We collect indices first to ensure stable mapping between v_idx (0..N) and graph nodes
     let node_indices: Vec<_> = graph.node_indices().collect();
 
@@ -83,6 +83,7 @@ pub fn all_ham_cycles(graph: &Graph<usize, (), Undirected>) -> Vec<Vec<usize>> {
         let neighbors: Vec<_> = graph.neighbors(node_idx).collect();
         
         for i in 0..node_count {
+            if i == node_count-1 && !restrict_to_cycles { break; };
             let next_i = (i + 1) % node_count;
             
             let mut clause = Clause::new();
@@ -164,21 +165,72 @@ fn ham_cycles_levels(l: &Lattice) -> Vec<Vec<Vec<usize>>> { // Vec over evels < 
     ret
 }
 
-// is s1 a subsequence of s2?
-fn is_subsequence(s1: &Vec<usize>, s2: &Vec<usize>) -> bool {
-    let mut p = 0; // pointer into s2
+// given a level, it generates the bridges above/below this level.
+// If an adjacent pair in level does not have a bridge, or if the bridges do not form intervals, we return None
+fn gen_bridges(level: &Vec<usize>, above: bool, l: &Lattice) -> Option<Vec<usize>> {
+  unimplemented!()
+}
 
-    for &x in s1 {
-        while p < s2.len() && s2[p] != x {
-            p += 1;
-        }
-        if p == s2.len() {
-            return false;
-        }
-        p += 1;
+// is s1 a subsequence of s2? 
+fn is_subsequence(s1: Vec<usize>, s2: Vec<usize>, cyclic: bool) -> bool {
+    // Handle Empty Case
+    if s1.is_empty() {
+        return true;
     }
 
+    // Deduplicate s1
+    let mut s1_dedup = Vec::new();
+    for &val in &s1 {
+        if s1_dedup.last() != Some(&val) {
+            s1_dedup.push(val);
+        }
+    }
+
+    // Cyclic Deduplication (Merge first and last if needed)
+    if cyclic && s1_dedup.len() > 1 {
+        if s1_dedup.first() == s1_dedup.last() {
+            s1_dedup.pop();
+        }
+    }
+
+    // If cyclic: search in s2 followed by s2 (simulates wrapping).
+    // If not cyclic: search in s2 only.
+    let s2_iter = s2.iter();
+    
+    // We use .chain() to repeat s2 without allocating a new vector
+    let mut search_space = if cyclic {
+        s2_iter.clone().chain(s2_iter).peekable()
+    } else {
+        s2_iter.clone().chain(std::slice::Iter::empty()).peekable()
+    };
+
+    // We try to find every element of s1_dedup in order within the search_space
+    for &target in &s1_dedup {
+        loop {
+            match search_space.next() {
+                Some(&candidate) => {
+                    if candidate == target {
+                        // Found the current target, move to the next number in s1
+                        break;
+                    }
+                },
+                None => {
+                    // We ran out of elements in s2 (or s2+s2) without finding the target
+                    return false;
+                }
+            }
+        }
+    }
     true
+}
+
+fn main() {
+    // Test: The case where looking for s1[0] first would fail
+    // s1 = [1, 2, 3]. Rotation [3, 1, 2] is the one that fits.
+    let s1 = vec![1, 2, 3];
+    let s2 = vec![3, 1, 5, 2];
+
+    println!("Optimized Check: {}", is_subsequence(s1, s2, true)); // Prints: true
 }
 
 pub fn rhombic_strips_simple(l: &Lattice, find_all: bool) -> Vec<Vec<Vec<usize>>> {
