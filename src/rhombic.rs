@@ -165,10 +165,30 @@ fn ham_cycles_levels(l: &Lattice) -> Vec<Vec<Vec<usize>>> { // Vec over evels < 
     ret
 }
 
+// a sorted tuple of length 2
+fn pair(a: usize, b: usize) -> (usize, usize) {
+    (min(a,b), max(a,b))
+}
+
 // given a level, it generates the bridges above/below this level.
-// If an adjacent pair in level does not have a bridge, or if the bridges do not form intervals, we return None
-fn gen_bridges(level: &Vec<usize>, above: bool, l: &Lattice) -> Option<Vec<usize>> {
-  unimplemented!()
+// If an adjacent pair in level does not have a bridge, we panic
+fn gen_bridges_unchecked(level: &Vec<usize>, orientation: &str, cyclic: bool, l: &Lattice) -> Vec<usize> {
+    let mut bridges: Vec<usize> = Vec::with_capacity(level.len());
+    for i in 0..level.len() {
+        bridges.push( match orientation {
+            "above" => { l.bridges_above[pair(level[i], level[i+1])] },
+            "below" => { l.bridges_below[pair(level[i], level[i+1])] },
+            _ => unreachable!()
+        })
+    }
+    if cyclic {
+        bridges.push( match orientation {
+            "above" => { l.bridges_above[pair(level[0], level[level.len()])] },
+            "below" => { l.bridges_below[pair(level[0], level[level.len()])] },
+            _ => unreachable!()
+        })
+    }
+    bridges
 }
 
 // is s1 a subsequence of s2? 
@@ -222,15 +242,6 @@ fn is_subsequence(s1: Vec<usize>, s2: Vec<usize>, cyclic: bool) -> bool {
         }
     }
     true
-}
-
-fn main() {
-    // Test: The case where looking for s1[0] first would fail
-    // s1 = [1, 2, 3]. Rotation [3, 1, 2] is the one that fits.
-    let s1 = vec![1, 2, 3];
-    let s2 = vec![3, 1, 5, 2];
-
-    println!("Optimized Check: {}", is_subsequence(s1, s2, true)); // Prints: true
 }
 
 pub fn rhombic_strips_simple(l: &Lattice, find_all: bool) -> Vec<Vec<Vec<usize>>> {
