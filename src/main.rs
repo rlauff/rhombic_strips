@@ -87,7 +87,6 @@ fn main() {
 
     for filename in input_files {
         println!("========================================");
-        println!("Processing file: {}", filename);
 
         // 1. Load the lattice using the new function
         let l = lattice_from_file(filename);
@@ -119,12 +118,12 @@ fn main() {
         println!("\nBreakdown by 0-dimensional layer (Hamilton Cycles):");
 
         // We start looking for paths at the bottom layer (Level 0)
-        for (i, _node) in levels[0].iter().enumerate() {
+        for (i, node) in levels[0].iter().enumerate() {
             // Calculate how many valid strips start with this specific cycle
             let count = count_paths(0, i, &levels, &mut memo);
 
             if count > 0 {
-                println!("  Cycle {}: found {} strip(s)", i, count);
+                println!("  Cycle {:?}: found {} strip(s)", node.faces, count);
                 total_solutions += count;
             }
         }
@@ -166,3 +165,32 @@ fn count_paths(
 
     count
 }
+
+// fn read_graphs(source: &str, centered: bool) -> Vec<Graph> {
+//     let mut graphs: Vec<Graph> = Vec::new();
+//
+//     for edgelist in read_to_string(source).expect("Read failed.").lines() {
+//         let edges_as_strings: Vec<&str> = edgelist[2..edgelist.len()-2].split("), (").collect();
+//         let mut edges: Vec<[usize; 2]> = Vec::new();
+//         for edge_str in edges_as_strings.iter() {
+//             let edge_vec: Vec<usize> = edge_str.split(", ").map(|r| r.parse::<usize>().unwrap()).collect();
+//             edges.push([edge_vec[0], edge_vec[1]]);
+//         }
+//         let mut vertices = Vec::new();
+//         for [a, b] in edges.iter() {
+//             if !vertices.contains(a) {
+//                 vertices.push(*a);
+//             }
+//             if !vertices.contains(b) {
+//                 vertices.push(*b);
+//             }
+//         }
+//         graphs.push(
+//             Graph {
+//                 vertices: vertices,
+//                 edges: edges,
+//                 tubes: None
+//             })
+//     }
+//     graphs
+// }

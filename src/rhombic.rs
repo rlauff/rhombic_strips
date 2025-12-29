@@ -5,13 +5,10 @@ use rayon::prelude::*;
 use itertools::Itertools;
 use petgraph::graph::Graph;
 use petgraph::Undirected;
-use rustsat::{
-    solvers::{Solve, SolveIncremental, SolverResult, SolveStats},
-    types::{Clause, Lit, TernaryVal},
-};
-use rustsat_cadical::CaDiCaL;
+use petgraph::graph::NodeIndex;
 use std::cmp::{ min, max };
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub fn shift_min_to_front(cycle: &mut Vec<usize>) {
     if let Some((min_index, _)) = cycle.iter().enumerate().min_by_key(|&(_, val)| val) {
@@ -19,171 +16,273 @@ pub fn shift_min_to_front(cycle: &mut Vec<usize>) {
     }
 }
 
-// given a graph, uses CaDiCaL to find all Hamilton paths in this graph. 
-pub fn all_ham_paths(graph: &Graph<usize, (), Undirected>, restrict_to_cycles: bool) -> Vec<Vec<usize>> {
+// given a graph, uses a backtracking DFS to find all Hamilton paths in this graph.
+// It enforces the "Color Block" constraint: edges of the same color must be adjacent in the path.
+// Parallelized using Rayon with granular step-based progress tracking.
+pub fn all_ham_paths(graph: &Graph<usize, (usize, usize), Undirected>, restrict_to_cycles: bool) -> Vec<Vec<usize>> {
     let node_count = graph.node_count();
-    println!("Running on nodes: {}", node_count);
 
     // Trivial cases
     if node_count == 0 {
         return vec![];
     }
 
-    let mut solver = CaDiCaL::default();
+    let indices: Vec<NodeIndex> = graph.node_indices().collect();
 
-    // Variable mapping:
-    // We need variables x_{v, i} representing "Vertex v is at position i in the path".
-    // We map these to a linear variable index: var = v * node_count + i
+    // Progress Tracking:
+    // nodes_processed: How many start nodes have been fully explored.
+    // total_steps: How many recursive DFS steps have been taken globally.
+    let nodes_processed = AtomicUsize::new(0);
+    let total_steps = AtomicUsize::new(0);
 
-    // helper to create a literal for x_{v, i}
-    let var_for = |v_idx: usize, pos_idx: usize| -> Lit {
-        let var_idx = v_idx * node_count + pos_idx;
-        Lit::positive(var_idx as u32)
-    };
+    // We search from ALL nodes to ensure we don't miss cycles due to color-block boundaries.
+    let raw_results: Vec<Vec<usize>> = (0..node_count).into_par_iter().flat_map(|start_idx| {
+        let mut local_results = Vec::new();
+        let mut path = Vec::with_capacity(node_count);
+        let mut visited = vec![false; node_count];
 
-    // 1. Each position i must be occupied by at least one vertex
-    for i in 0..node_count {
-        let mut clause = Clause::new();
-        for v in 0..node_count {
-            clause.add(var_for(v, i));
+        // Local step counter to batch atomic updates (avoids contention)
+        let mut local_step_count = 0;
+
+        let start_node = indices[start_idx];
+
+        visited[start_idx] = true;
+        path.push(start_idx);
+
+        let mut forbidden_up = HashSet::new();
+        let mut forbidden_down = HashSet::new();
+
+        dfs_ham(
+            graph,
+            &indices,
+            &mut path,
+            &mut visited,
+            &mut local_results,
+            restrict_to_cycles,
+            // Above Colors
+            None, None, &mut forbidden_up,
+            // Below Colors
+            None, None, &mut forbidden_down,
+            // Progress tracking
+            &total_steps,
+            &mut local_step_count
+        );
+
+        // Flush any remaining local steps to the global counter
+        if local_step_count > 0 {
+            total_steps.fetch_add(local_step_count, Ordering::Relaxed);
         }
-        solver.add_clause(clause);
-    }
 
-    // 2. Each position i must be occupied by at most one vertex
-    for i in 0..node_count {
-        for v in 0..node_count {
-            for w in (v + 1)..node_count {
-                solver.add_clause(Clause::from_iter([
-                    !var_for(v, i),
-                    !var_for(w, i)
-                ]));
-            }
-        }
-    }
+        // Update completed nodes
+        let completed = nodes_processed.fetch_add(1, Ordering::Relaxed) + 1;
 
-    // 3. Each vertex v must appear at least once in the path
-    for v in 0..node_count {
-        let mut clause = Clause::new();
-        for i in 0..node_count {
-            clause.add(var_for(v, i));
-        }
-        solver.add_clause(clause);
-    }
+        // Print final status for this node
+        // (Optional: You can comment this out if the step-based printing is sufficient)
+        // println!("Finished start node {}/{}", completed, node_count);
 
-    // 4. Each vertex v must appear at most once in the path
-    for v in 0..node_count {
-        for i in 0..node_count {
-            for j in (i + 1)..node_count {
-                solver.add_clause(Clause::from_iter([
-                    !var_for(v, i),
-                    !var_for(v, j)
-                ])).expect("failed to add clause");
-            }
-        }
-    }
+        local_results
+    }).collect();
 
-    // 5. Adjacency constraints (The path/cycle must follow edges)
-    // We collect indices first to ensure stable mapping between v_idx (0..N) and graph nodes
-    let node_indices: Vec<_> = graph.node_indices().collect();
-
-    for (v_idx, &node_idx) in node_indices.iter().enumerate() {
-        let neighbors: Vec<_> = graph.neighbors(node_idx).collect();
-
-        for i in 0..node_count {
-            if i == node_count-1 && !restrict_to_cycles { break; };
-            let next_i = (i + 1) % node_count;
-
-            let mut clause = Clause::new();
-
-            // If v is at i...
-            clause.add(!var_for(v_idx, i));
-
-            // ...then one of the neighbors must be at i+1
-            for neighbor_node_idx in &neighbors {
-                if let Some(neighbor_v_idx) = node_indices.iter().position(|n| n == neighbor_node_idx) {
-                    clause.add(var_for(neighbor_v_idx, next_i));
-                }
-            }
-
-            solver.add_clause(clause);
-        }
-    }
-
-    let mut ham_cycles = Vec::new();
-    loop {
-        let result = solver.solve().expect("Solver error");
-
-        match result {
-            SolverResult::Sat => {
-                let sol = solver.full_solution().unwrap();
-                let mut ham_cycle = Vec::new();
-
-                // Incremental: Block the found solution to find the next one
-                // We construct the negation of the current solution vector
-                let mut blocking_clause = Clause::new();
-                for i in 0..node_count {
-                    for v in 0..node_count {
-                        let lit = var_for(v, i);
-                        // If the variable was true in the model, add its negation to the clause
-                        if sol[lit.var()] == TernaryVal::True {
-                            blocking_clause.add(!lit);
-
-                            // BUG FIX: Map the internal index 'v' back to the actual graph node weight.
-                            // Previously: ham_cycle.push(v); -> this only pushed 0,1,2...
-                            let graph_node_index = node_indices[v];
-                            let real_value = graph[graph_node_index];
-                            ham_cycle.push(real_value);
-                        }
-                    }
-                }
-                solver.add_clause(blocking_clause);
-                ham_cycles.push(ham_cycle);
-            },
-            SolverResult::Unsat => {
-                break;
-            },
-            SolverResult::Interrupted => {
-                panic!("Solver got interruped");
-            }
-        }
-    }
-    // if restrict_to_cycles , we shift the array to a canonical starting point and then deduplicate.
+    // Deduplicate results
     if restrict_to_cycles {
-        for cycle in ham_cycles.iter_mut() {
-            shift_min_to_front(cycle);
+        let mut unique_cycles = HashSet::new();
+        let mut ret = Vec::new();
+
+        for mut cycle in raw_results {
+            let mut values: Vec<usize> = cycle.iter().map(|&i| graph[indices[i]]).collect();
+            shift_min_to_front(&mut values);
+            if unique_cycles.insert(values.clone()) {
+                ret.push(values);
+            }
+        }
+        ret
+    } else {
+        raw_results.into_iter()
+            .map(|cycle| cycle.iter().map(|&i| graph[indices[i]]).collect())
+            .collect()
+    }
+}
+
+// Helper DFS function
+#[allow(clippy::too_many_arguments)]
+fn dfs_ham(
+    graph: &Graph<usize, (usize, usize), Undirected>,
+    indices: &[NodeIndex],
+    path: &mut Vec<usize>,
+    visited: &mut Vec<bool>,
+    results: &mut Vec<Vec<usize>>,
+    restrict_to_cycles: bool,
+    // Color State Above
+    cur_up: Option<usize>,
+    start_up: Option<usize>,
+    forbidden_up: &mut HashSet<usize>,
+    // Color State Below
+    cur_down: Option<usize>,
+    start_down: Option<usize>,
+    forbidden_down: &mut HashSet<usize>,
+    // Progress Counters
+    global_steps: &AtomicUsize,
+    local_steps: &mut usize,
+) {
+    // 1. Progress Reporting Logic
+    *local_steps += 1;
+    // Sync with global counter every 20,000 steps to reduce atomic overhead
+    if *local_steps >= 20_000 {
+        let old_val = global_steps.fetch_add(*local_steps, Ordering::Relaxed);
+        let new_val = old_val + *local_steps;
+        *local_steps = 0;
+
+        // Print a "Heartbeat" every 5 million steps globally
+        // The check (old / N != new / N) ensures we print exactly once when crossing the threshold
+        const PRINT_INTERVAL: usize = 5_000_000;
+        if old_val / PRINT_INTERVAL != new_val / PRINT_INTERVAL {
+            let s = format!("Progress Update: ~{} million steps searched...",
+                            new_val / 1_000_000);
+            print!("{}{}", s, "\r".repeat(s.len()));
         }
     }
-    let mut ret = Vec::with_capacity(ham_cycles.len());
-    for cycle in ham_cycles.into_iter() {
-        if !ret.contains(&cycle) {
-            ret.push(cycle);
+
+    let n = graph.node_count();
+    let current_u_idx = *path.last().unwrap();
+    let current_node = indices[current_u_idx];
+
+    // Base case: Path is full length
+    if path.len() == n {
+        if restrict_to_cycles {
+            let start_u_idx = path[0];
+            let start_node = indices[start_u_idx];
+
+            if let Some(edge) = graph.find_edge(current_node, start_node) {
+                let (c_up, c_down) = graph[edge];
+                let valid_up = check_cycle_close(c_up, cur_up, start_up, forbidden_up);
+                let valid_down = check_cycle_close(c_down, cur_down, start_down, forbidden_down);
+
+                if valid_up && valid_down {
+                    results.push(path.clone());
+                }
+            }
+        } else {
+            results.push(path.clone());
+        }
+        return;
+    }
+
+    // Recursive step: Try all unvisited neighbors
+    let neighbors: Vec<_> = graph.neighbors(current_node).collect();
+
+    for neighbor in neighbors {
+        let neighbor_idx = match indices.iter().position(|&i| i == neighbor) {
+            Some(i) => i,
+            None => continue,
+        };
+
+        if !visited[neighbor_idx] {
+            let edge = graph.find_edge(current_node, neighbor).unwrap();
+            let (c_up, c_down) = graph[edge];
+
+            // 1. Try step Above
+            let (valid_up, switched_up) = check_step(c_up, cur_up, forbidden_up);
+            if !valid_up { continue; }
+
+            // 2. Try step Below
+            let (valid_down, switched_down) = check_step(c_down, cur_down, forbidden_down);
+            if !valid_down { continue; }
+
+            // 3. Apply changes and Recurse
+            visited[neighbor_idx] = true;
+            path.push(neighbor_idx);
+
+            let next_start_up = start_up.or(Some(c_up));
+            let next_start_down = start_down.or(Some(c_down));
+
+            let mut added_up = false;
+            if switched_up {
+                if let Some(old_c) = cur_up { added_up = forbidden_up.insert(old_c); }
+            }
+
+            let mut added_down = false;
+            if switched_down {
+                if let Some(old_c) = cur_down { added_down = forbidden_down.insert(old_c); }
+            }
+
+            dfs_ham(
+                graph, indices, path, visited, results, restrict_to_cycles,
+                Some(c_up), next_start_up, forbidden_up,
+                Some(c_down), next_start_down, forbidden_down,
+                global_steps, local_steps
+            );
+
+            // 4. Backtrack
+            if added_up {
+                if let Some(old_c) = cur_up { forbidden_up.remove(&old_c); }
+            }
+            if added_down {
+                if let Some(old_c) = cur_down { forbidden_down.remove(&old_c); }
+            }
+
+            path.pop();
+            visited[neighbor_idx] = false;
         }
     }
-    ret
+}
+
+// Logic to check if taking an edge with 'color' is valid given current state
+fn check_step(color: usize, current: Option<usize>, forbidden: &HashSet<usize>) -> (bool, bool) {
+    match current {
+        None => (true, false),
+        Some(cur) => {
+            if color == cur {
+                (true, false)
+            } else {
+                if forbidden.contains(&color) {
+                    (false, true)
+                } else {
+                    (true, true)
+                }
+            }
+        }
+    }
+}
+
+// Logic to check the final closing edge of a cycle
+fn check_cycle_close(
+    color: usize,
+    current: Option<usize>,
+    start: Option<usize>,
+    forbidden: &HashSet<usize>
+) -> bool {
+    if current == Some(color) { return true; }
+    if start == Some(color) { return true; }
+    !forbidden.contains(&color)
 }
 
 // constructs the graph for each level and then calls all_ham_paths on this graph
 // we connect x and y of the same level if and only if they have a bridge above and below
-fn ham_cycles_levels(l: &Lattice, cyclic: bool) -> Vec<Vec<Vec<usize>>> { // Vec over evels < Vec over ham cycles < vec over vertices of cycle
+fn ham_cycles_levels(l: &Lattice, cyclic: bool) -> Vec<Vec<Vec<usize>>> {
     let num_levels = l.levels.len();
     let mut ret = Vec::new();
 
     for (i, level) in l.levels.iter().enumerate() {
-        // build the graph
+        println!("Processing level {}/{}", i + 1, num_levels);
+
         let mut graph = Graph::new_undirected();
         let mut node_indices = Vec::new();
-        // add vertices
         for x in level {
             let idx = graph.add_node(*x);
             node_indices.push(idx);
         }
-        // add edges between x and y if they have a bridge in the layer above and in the layer below
+
         for a in &node_indices {
             for b in &node_indices {
+                if a >= b { continue; }
+
                 let (x, y) = (graph[*a], graph[*b]);
                 if (i == num_levels-1 || l.bridges_above.contains_key(&pair(x, y))) && (i == 0 || l.bridges_below.contains_key(&pair(x, y))) {
-                    graph.add_edge(*a, *b, ());
+
+                    let c_above = if i == num_levels - 1 { 0 } else { *l.bridges_above.get(&pair(x, y)).unwrap_or(&0) };
+                    let c_below = if i == 0 { 0 } else { *l.bridges_below.get(&pair(x, y)).unwrap_or(&0) };
+
+                    graph.add_edge(*a, *b, (c_above, c_below));
                 }
             }
         }
@@ -330,14 +429,14 @@ fn bridges_if_valid(level: &Vec<usize>, cyclic: bool, is_lowest: bool, is_highes
     } else {
         gen_bridges_unchecked(level, Orientation::Above, cyclic, l)
     };
-    if !violation_free(&bridges_above, cyclic) { return None; }; // if not valid, stop here
+    if !violation_free(&bridges_above, cyclic) { panic!("Bridges not valid, should not happen with new Hamiltonicity check"); }; // if not valid, stop here
     bridges_above.dedup();                                  // dedup already here, no need to store the duplicates
     let mut bridges_below = if is_lowest {
         Vec::new()
     } else {
         gen_bridges_unchecked(level, Orientation::Below, cyclic, l)
     };
-    if !violation_free(&bridges_below, cyclic) { return None }; // if not valid, stop here
+    if !violation_free(&bridges_below, cyclic) { panic!("Bridges not valid, should not happen with new Hamiltonicity check"); }; // if not valid, stop here
     bridges_below.dedup();
     Some((bridges_above, bridges_below))
 }
