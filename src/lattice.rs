@@ -118,7 +118,7 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         levels: levels,
         bridges_above: bridges_above,
         bridges_below: bridges_below,
-        dim: max_dim,
+        dim: max_dim+1,
     }
 }
 
@@ -286,17 +286,5 @@ pub fn lattice_from_graph(g: &mut Graph) -> Lattice {
         dim: max_dim,
     }
 }
-
-// pub fn get_jobs(source: &str) {
-//     let mut lattices: Vec<Lattice> = vec![];
-//     for job_str in read_to_string(file).expect("reading file failed").split("%%") {
-//         if job_str.chars().nth(0).unwrap() == 'G' { //we have a graph
-//             let edges_str = job_str.split(": ").nth(1).unwrap();
-//
-//         } else { //we have a lattice
-//
-//         }
-//     }
-// }
 
 

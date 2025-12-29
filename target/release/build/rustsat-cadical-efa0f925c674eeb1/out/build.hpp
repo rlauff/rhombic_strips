@@ -1,0 +1,5 @@
+#define VERSION "2.1.3"
+#define IDENTIFIER "refs/tags/rel-2.1.3"
+#define COMPILER "c++ (GCC) 15.2.1 20251111 (Red Hat 15.2.1-4)"
+#define FLAGS "-O3 -ffunction-sections -fdata-sections -fPIC -m64 -std=c++11 -w -DNDEBUG -DNCONTRACTS -DNTRACING -DQUIET -DNUNLOCKED -DFLIP -DILB -DIPASIRUP -DPROPAGATE -DTRACER"
+#define DATE "2025-12-29 13:08:37.659894187 UTC"

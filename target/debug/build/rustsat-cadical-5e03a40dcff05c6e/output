@@ -1,0 +1,230 @@
+OPT_LEVEL = Some(0)
+OUT_DIR = Some(/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out)
+TARGET = Some(x86_64-unknown-linux-gnu)
+CARGO_ENCODED_RUSTFLAGS = Some()
+HOST = Some(x86_64-unknown-linux-gnu)
+cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-gnu
+CXX_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_gnu
+CXX_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+RUSTC_WRAPPER = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+DEBUG = Some(true)
+CARGO_CFG_TARGET_FEATURE = Some(fxsr,sse,sse2)
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_gnu
+CXXFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-gnu
+CXXFLAGS_x86_64-unknown-linux-gnu = None
+OPT_LEVEL = Some(0)
+OUT_DIR = Some(/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out)
+TARGET = Some(x86_64-unknown-linux-gnu)
+CARGO_ENCODED_RUSTFLAGS = Some()
+HOST = Some(x86_64-unknown-linux-gnu)
+cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-gnu
+CXX_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_gnu
+CXX_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+RUSTC_WRAPPER = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+DEBUG = Some(true)
+CARGO_CFG_TARGET_FEATURE = Some(fxsr,sse,sse2)
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_gnu
+CXXFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-gnu
+CXXFLAGS_x86_64-unknown-linux-gnu = None
+OPT_LEVEL = Some(0)
+OUT_DIR = Some(/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out)
+TARGET = Some(x86_64-unknown-linux-gnu)
+CARGO_ENCODED_RUSTFLAGS = Some()
+HOST = Some(x86_64-unknown-linux-gnu)
+cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-gnu
+CXX_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_gnu
+CXX_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+RUSTC_WRAPPER = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+DEBUG = Some(true)
+CARGO_CFG_TARGET_FEATURE = Some(fxsr,sse,sse2)
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_gnu
+CXXFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-gnu
+CXXFLAGS_x86_64-unknown-linux-gnu = None
+OUT_DIR = Some(/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out)
+TARGET = Some(x86_64-unknown-linux-gnu)
+CARGO_ENCODED_RUSTFLAGS = Some()
+HOST = Some(x86_64-unknown-linux-gnu)
+cargo:rerun-if-env-changed=CXX_x86_64-unknown-linux-gnu
+CXX_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CXX_x86_64_unknown_linux_gnu
+CXX_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CXX
+HOST_CXX = None
+cargo:rerun-if-env-changed=CXX
+CXX = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+RUSTC_WRAPPER = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+DEBUG = Some(true)
+CARGO_CFG_TARGET_FEATURE = Some(fxsr,sse,sse2)
+cargo:rerun-if-env-changed=CXXFLAGS
+CXXFLAGS = None
+cargo:rerun-if-env-changed=HOST_CXXFLAGS
+HOST_CXXFLAGS = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64_unknown_linux_gnu
+CXXFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CXXFLAGS_x86_64-unknown-linux-gnu
+CXXFLAGS_x86_64-unknown-linux-gnu = None
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+exit status: 0
+cargo:rerun-if-env-changed=AR_x86_64-unknown-linux-gnu
+AR_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=AR_x86_64_unknown_linux_gnu
+AR_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_AR
+HOST_AR = None
+cargo:rerun-if-env-changed=AR
+AR = None
+cargo:rerun-if-env-changed=ARFLAGS
+ARFLAGS = None
+cargo:rerun-if-env-changed=HOST_ARFLAGS
+HOST_ARFLAGS = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64_unknown_linux_gnu
+ARFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64-unknown-linux-gnu
+ARFLAGS_x86_64-unknown-linux-gnu = None
+cargo:rustc-link-lib=static=cadical
+cargo:rustc-link-search=native=/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out
+cargo:rerun-if-env-changed=CXXSTDLIB_x86_64-unknown-linux-gnu
+CXXSTDLIB_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CXXSTDLIB_x86_64_unknown_linux_gnu
+CXXSTDLIB_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CXXSTDLIB
+HOST_CXXSTDLIB = None
+cargo:rerun-if-env-changed=CXXSTDLIB
+CXXSTDLIB = None
+cargo:rustc-link-lib=stdc++
+cargo:rustc-link-search=/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out
+cargo:rustc-link-search=/home/robert/Code/rhombic_strips/target/debug/build/rustsat-cadical-5e03a40dcff05c6e/out/lib
+cargo:rustc-link-lib=static=cadical
+cargo:rustc-link-lib=dylib=stdc++
+cargo:rerun-if-changed=cpp-extension/ccadical_extension.h
+cargo:rerun-if-changed=cpp-extension/ctracer.h
+cargo:rerun-if-changed=cpp-extension/ccadical_extension.cpp
+cargo:rerun-if-changed=cpp-extension/ctracer.cpp
+cargo:rerun-if-changed=cpp-extension/solver_extension.cpp
+cargo:rustc-check-cfg=cfg(cadical_feature, values("flip", "propagate", "pysat-propcheck", "lrat", "frat", "idrup", "proof-tracer"))
+cargo:rustc-cfg=cadical_feature="flip"
+cargo:rustc-cfg=cadical_feature="propagate"
+cargo:rustc-cfg=cadical_feature="lrat"
+cargo:rustc-cfg=cadical_feature="frat"
+cargo:rustc-cfg=cadical_feature="idrup"
+cargo:rustc-cfg=cadical_feature="proof-tracer"

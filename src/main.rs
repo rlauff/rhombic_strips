@@ -5,11 +5,9 @@ use crate::lattice::*;
 mod rhombic;
 use crate::rhombic::*;
 
+use std::time::Instant;
+
 use colored::Colorize;
-
-use std::fs::read_to_string;
-
-use std::collections::HashSet;
 
 
 fn layers_to_sequence(layers: &Vec<Vec<usize>>, l: &Lattice) -> Vec<usize> {
@@ -81,123 +79,90 @@ fn reduced(mut s: Vec<usize>) -> Vec<usize> {
     ret
 }
 
-fn _main() {
-
-    let _l = lattice_from_file("cube3d");
-
-    let dont_care_about_total = true;
-
-
-    let source = "all_graphs";
-    //let source = "test_graphs";
-    let mut graphs: Vec<Graph> = Vec::new();
-
-    for edgelist in read_to_string(source).expect("Read failed.").lines() {
-        let edges_as_strings: Vec<&str> = edgelist[2..edgelist.len()-2].split("), (").collect();
-        let mut edges: Vec<[usize; 2]> = Vec::new();
-        for edge_str in edges_as_strings.iter() {
-            let edge_vec: Vec<usize> = edge_str.split(", ").map(|r| r.parse::<usize>().unwrap()).collect();
-            edges.push([edge_vec[0], edge_vec[1]]);
-        }
-        let mut vertices = Vec::new();
-        for [a, b] in edges.iter() {
-            if !vertices.contains(a) {
-                vertices.push(*a);
-            }
-            if !vertices.contains(b) {
-                vertices.push(*b);
-            }
-        }
-        graphs.push(
-            Graph {
-                vertices: vertices,
-                edges: edges,
-                tubes: None
-            })
-    }
-
-    let mut graphs_with = vec![];
-    let mut graphs_without = vec![];
-    let num_graphs = graphs.len();
-
-    for (i, mut g) in graphs.into_iter().enumerate() {
-        let l = lattice_from_graph(&mut g);
-        let mut total = 0;
-        let hcs = l.ham_cycles.clone();
-        let num_hcs = hcs.len();
-        if num_hcs == 0 { continue };
-        let mut sols = HashSet::new();
-
-        println!("{}", format!("Graph ({i}/{num_graphs}): {:?}", g.edges).blue().bold());
-        for (_i, hc) in hcs.into_iter().enumerate() {
-            //print!("  Number of rhombic strips based on Hamilton cycle {:?} ({i} / {num_hcs}):    ", hc);
-            let found = rhombic_strips_dfs_simple(vec![hc], &l, l.dim.clone());
-            let num_found = found.len();
-            for sol in found.iter() {
-                sols.insert(reduced(layers_to_sequence(sol, &l)));
-            }
-            //println!("{}", num_found);
-            total += num_found;
-            if dont_care_about_total && total > 0 { break };
-            // if g.edges.len() >= g.vertices.len()*(g.vertices.len()-1)/2-1 {
-            //     break
-            // };
-        }
-        if total > 0 {
-            println!("In total {} were found. Up to isomorphism: {}", format!("{}", total).green(), format!("{}", sols.len()).green());
-            graphs_with.push(g.edges.clone());
-        } else {
-            println!("In total {} were found.", format!("{}", total).red());
-            graphs_without.push(g.edges.clone());
-        }
-        println!();
-    }
-    println!("{}", "Graphs without rhombic strip:");
-    for edges in graphs_without.iter() {
-        println!("{:?}", edges);
-    }
-
-    println!("\n\nRatio with/without: {}", graphs_with.len() as f64/graphs_without.len() as f64);
-}
-
-
-
 
 
 fn main() {
+    // Files to process
+    let input_files = vec!["cube3d", "cube4d"];
 
-    println!("3D cube:");
+    for filename in input_files {
+        println!("========================================");
+        println!("Processing file: {}", filename);
 
-    let l = lattice_from_file("cube3d");
-    let mut total = 0;
+        // 1. Load the lattice using the new function
+        let l = lattice_from_file(filename);
+        println!("Lattice loaded from {}. Dimension: {}", filename, l.dim);
 
-    let mut sols = HashSet::new();
-    //print!("  Number of rhombic strips based on Hamilton cycle {:?} ({i} / {num_hcs}):    ", hc);
-    let found = rhombic_strips_dfs_simple(vec![vec![0,4,5,7,6,2,3,1]], &l, l.dim.clone());
-    let num_found = found.len();
-    for sol in found.iter() {
-        sols.insert(reduced(layers_to_sequence(sol, &l)));
+        // 2. Compute the Rhombic Strips structure
+        let start = Instant::now();
+        // parameters: lattice, cyclic=true, find_all=false
+        let levels = rhombic_strips_simple(&l, true);
+        let duration = start.elapsed();
+
+        println!("Computed strip structure in {:?}", duration);
+
+        if levels.is_empty() {
+            println!("No rhombic strips found.");
+            continue;
+        }
+
+        // 3. Count solutions using DFS with Memoization
+        // The structure is a DAG (Directed Acyclic Graph).
+        // We use memoization to avoid re-calculating the number of paths for the same node multiple times.
+        // memo[layer_index][node_index] -> Option<Number of paths to top>
+        let mut memo: Vec<Vec<Option<u128>>> = levels.iter()
+            .map(|layer| vec![None; layer.len()])
+            .collect();
+
+        let mut total_solutions: u128 = 0;
+
+        println!("\nBreakdown by 0-dimensional layer (Hamilton Cycles):");
+
+        // We start looking for paths at the bottom layer (Level 0)
+        for (i, _node) in levels[0].iter().enumerate() {
+            // Calculate how many valid strips start with this specific cycle
+            let count = count_paths(0, i, &levels, &mut memo);
+
+            if count > 0 {
+                println!("  Cycle {}: found {} strip(s)", i, count);
+                total_solutions += count;
+            }
+        }
+
+        println!("\nTotal Rhombic Strips found: {}", total_solutions);
+        println!("========================================\n");
     }
-    //println!("{}", num_found);
-    total += num_found;
+}
 
-    println!("In total {} were found. Up to isomorphism: {}\n", format!("{}", total).green(), format!("{}", sols.len()).green());
-
-
-    println!("4D cube:");
-
-    let l = lattice_from_file("cube4d");
-    total = 0;
-
-    let mut sols = HashSet::new();
-    //print!("  Number of rhombic strips based on Hamilton cycle {:?} ({i} / {num_hcs}):    ", hc);
-    let found = rhombic_strips_dfs_simple(vec![vec![0,1,3,2,6,7,5,4,12,13,15,14,10,11,9,8]], &l, l.dim.clone());
-    let num_found = found.len();
-    for sol in found.iter() {
-        sols.insert(reduced(layers_to_sequence(sol, &l)));
+/// Recursively counts the number of paths from the current node to the top layer.
+/// Uses the 'memo' table to cache results.
+fn count_paths(
+    layer_idx: usize,
+    node_idx: usize,
+    levels: &Vec<Vec<Level>>,
+    memo: &mut Vec<Vec<Option<u128>>>
+) -> u128 {
+    // Base Case: If we reached the top layer, this counts as 1 valid strip.
+    if layer_idx == levels.len() - 1 {
+        return 1;
     }
-    //println!("{}", num_found);
-    total += num_found;
 
-    println!("In total {} were found. Up to isomorphism: {}", format!("{}", total).green(), format!("{}", sols.len()).green());
+    // Check Cache: Have we already computed the count for this specific node?
+    if let Some(saved_count) = memo[layer_idx][node_idx] {
+        return saved_count;
+    }
+
+    // Recursive Step: Sum the path counts of all valid parents.
+    // In our structure, 'parents' are the compatible nodes in the layer above (layer_idx + 1).
+    let mut count: u128 = 0;
+
+    for &parent_idx in &levels[layer_idx][node_idx].parents {
+        count += count_paths(layer_idx + 1, parent_idx, levels, memo);
+    }
+
+
+    // Save result to cache before returning
+    memo[layer_idx][node_idx] = Some(count);
+
+    count
 }

@@ -1,5 +1,5 @@
-   0.051964703s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint: fingerprint error for rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips)/Check { test: false }/TargetInner { name: "rhombic_strips", doc: true, ..: with_path("/home/robert/Code/rhombic_strips/src/main.rs", Edition2021) }
-   0.051985702s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rhombic_strips-72f169eb679daf05/bin-rhombic_strips`
+   0.208560344s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint: fingerprint error for rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips)/Check { test: false }/TargetInner { name: "rhombic_strips", doc: true, ..: with_path("/home/robert/Code/rhombic_strips/src/main.rs", Edition2021) }
+   0.208609876s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rhombic_strips-72f169eb679daf05/bin-rhombic_strips`
 
 Caused by:
     No such file or directory (os error 2)
@@ -41,8 +41,8 @@ Stack backtrace:
   24: <unknown>
   25: __libc_start_main
   26: <unknown>
-   0.062303098s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="rustsat_cadical"}: cargo::core::compiler::fingerprint: fingerprint error for rustsat-cadical v0.7.4/Check { test: false }/TargetInner { ..: lib_target("rustsat_cadical", ["lib"], "/home/robert/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustsat-cadical-0.7.4/src/lib.rs", Edition2021) }
-   0.062316362s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="rustsat_cadical"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rustsat-cadical-fe0ed371f449aeb2/lib-rustsat_cadical`
+   0.226292466s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="rustsat_cadical"}: cargo::core::compiler::fingerprint: fingerprint error for rustsat-cadical v0.7.4/Check { test: false }/TargetInner { ..: lib_target("rustsat_cadical", ["lib"], "/home/robert/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustsat-cadical-0.7.4/src/lib.rs", Edition2021) }
+   0.226317723s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="rustsat_cadical"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rustsat-cadical-fe0ed371f449aeb2/lib-rustsat_cadical`
 
 Caused by:
     No such file or directory (os error 2)
@@ -85,8 +85,8 @@ Stack backtrace:
   25: <unknown>
   26: __libc_start_main
   27: <unknown>
-   0.062710277s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for rustsat-cadical v0.7.4/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/home/robert/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustsat-cadical-0.7.4/build.rs", Edition2021) }
-   0.062720596s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rustsat-cadical-5e03a40dcff05c6e/run-build-script-build-script-build`
+   0.226913076s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for rustsat-cadical v0.7.4/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/home/robert/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustsat-cadical-0.7.4/build.rs", Edition2021) }
+   0.226927493s  INFO prepare_target{force=false package_id=rustsat-cadical v0.7.4 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rustsat-cadical-5e03a40dcff05c6e/run-build-script-build-script-build`
 
 Caused by:
     No such file or directory (os error 2)
@@ -131,8 +131,8 @@ Stack backtrace:
   27: <unknown>
   28: __libc_start_main
   29: <unknown>
-   0.063810628s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint: fingerprint error for rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips)/Check { test: true }/TargetInner { name: "rhombic_strips", doc: true, ..: with_path("/home/robert/Code/rhombic_strips/src/main.rs", Edition2021) }
-   0.063819966s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rhombic_strips-8af242bb5b0aba34/test-bin-rhombic_strips`
+   0.228728449s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint: fingerprint error for rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips)/Check { test: true }/TargetInner { name: "rhombic_strips", doc: true, ..: with_path("/home/robert/Code/rhombic_strips/src/main.rs", Edition2021) }
+   0.228750721s  INFO prepare_target{force=false package_id=rhombic_strips v0.1.0 (/home/robert/Code/rhombic_strips) target="rhombic_strips"}: cargo::core::compiler::fingerprint:     err: failed to read `/home/robert/Code/rhombic_strips/target/debug/.fingerprint/rhombic_strips-8af242bb5b0aba34/test-bin-rhombic_strips`
 
 Caused by:
     No such file or directory (os error 2)
@@ -407,7 +407,7 @@ Caused by:
 
   --- stderr
 
-  thread 'main' (4607) panicked at /home/robert/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bindgen-0.72.1/lib.rs:616:27:
+  thread 'main' (9276) panicked at /home/robert/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bindgen-0.72.1/lib.rs:616:27:
   Unable to find libclang: "couldn't find any valid shared libraries matching: ['libclang.so', 'libclang-*.so', 'libclang.so.*', 'libclang-*.so.*'], set the `LIBCLANG_PATH` environment variable to a path where one of these files can be found (invalid: [])"
   stack backtrace:
      0: __rustc::rust_begin_unwind
