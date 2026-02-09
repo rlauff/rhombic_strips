@@ -20,7 +20,7 @@ pub struct Face {
 #[derive(Debug)]
 pub struct Lattice {    // all usize are indices pointing into the faces vec
     pub faces: Vec<Face>,
-    pub levels: Vec<Vec<usize>>, 
+    pub levels: Vec<Vec<usize>>,
     pub bridges_above: HashMap<(usize, usize), usize>, // for a pair in the same level, returns the bridge above
     pub bridges_below: HashMap<(usize, usize), usize>, // for a pair in the same level, returns the bridge below
     pub dim: usize,
@@ -79,9 +79,9 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         faces.push(
             Face {
                 label: face_str.split(": ").nth(1).expect("reading of a face failed, check lattice file").to_string(),
-                dim: dim,
-                upset: upset,
-                downset: downset,
+                   dim: dim,
+                   upset: upset,
+                   downset: downset,
             }
         );
     }
@@ -133,7 +133,7 @@ pub struct Graph {
     pub vertices: Vec<usize>,
     pub edges: Vec<[usize; 2]>,
     pub tubes: Option<Vec<Vec<usize>>>,
-//    tubings: Option<HashSet<Vec<Vec<usize>>>>,
+    //    tubings: Option<HashSet<Vec<Vec<usize>>>>,
 }
 
 impl Graph {
@@ -165,43 +165,22 @@ impl Graph {
         return true;
     }
 
-    pub fn find_tubes(&mut self) {
+    pub fn find_tubes(&mut self, centered: bool) {
         match self.tubes {
             Some(_) => {return;}
             None => {
                 let mut tubes = vec![];
                 for subset in subsets(&self.vertices).iter() {
+                    // Restrict to tubes containing 0 if centered is true
+                    if centered && !subset.contains(&0) {
+                        continue;
+                    }
                     if self.is_connected(&subset) {tubes.push(subset.to_vec());}
                 }
                 self.tubes = Some(tubes);
             }
         }
         return;
-    }
-
-    pub fn ham_cycles(&self) -> Vec<Vec<usize>> {
-        let mut active_paths = vec![vec![self.vertices[0]]];
-        let mut new_paths = vec![];
-        for _i in 0..(self.vertices.len()-1) {
-            for path in active_paths.iter() {
-                for [a, b] in self.edges.iter() {
-                    if *a == path[path.len()-1] && !path.contains(&b) {
-                        let mut new = path.clone();
-                        new.push(*b);
-                        new_paths.push(new);
-                    }
-                    if *b == path[path.len()-1] && !path.contains(&a) {
-                        let mut new = path.clone();
-                        new.push(*a);
-                        new_paths.push(new);
-                    }
-                }
-            }
-            active_paths.clear();
-            active_paths = new_paths.clone();
-            new_paths.clear();
-        }
-        active_paths.into_iter().filter(|x| self.edges.contains(&[x[x.len()-1], self.vertices[0]]) || self.edges.contains(&[self.vertices[0], x[x.len()-1]])).collect()
     }
 }
 
@@ -213,10 +192,9 @@ fn is_above(tube1: &Vec<usize>, tube2: &Vec<usize>) -> bool {
     true
 }
 
-pub fn lattice_from_graph(g: &mut Graph) -> Lattice {
-    g.find_tubes();
+pub fn lattice_from_graph(g: &mut Graph, centered: bool) -> Lattice {
+    g.find_tubes(centered);
     let tubes = g.tubes.clone().unwrap();
-    let _ham_cycles = g.ham_cycles();
 
 
     let mut faces = vec![];
@@ -225,7 +203,10 @@ pub fn lattice_from_graph(g: &mut Graph) -> Lattice {
         let label = format!("{:?}", tube);
 
         //dim
-        let dim = tube.len()-1;
+        let dim = if centered { tube.len() - 1 } else { tube.len() - 1 };
+        // Note: Logic for dim remains same for now, usually |tube|-1 for full tubing lattice.
+        // If centered is effectively changing the poset structure significantly, ensure dim calculation fits definition.
+        // Based on tube.len()-1 being standard for tubings.
 
         //upset
         let mut upset = vec![];
@@ -286,5 +267,3 @@ pub fn lattice_from_graph(g: &mut Graph) -> Lattice {
         dim: max_dim,
     }
 }
-
-

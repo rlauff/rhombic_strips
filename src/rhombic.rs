@@ -135,11 +135,11 @@ fn dfs_ham(
         // Print a "Heartbeat" every 5 million steps globally
         // The check (old / N != new / N) ensures we print exactly once when crossing the threshold
         const PRINT_INTERVAL: usize = 5_000_000;
-        if old_val / PRINT_INTERVAL != new_val / PRINT_INTERVAL {
-            let s = format!("Progress Update: ~{} million steps searched...",
-                            new_val / 1_000_000);
-            print!("{}{}", s, "\r".repeat(s.len()));
-        }
+        // if old_val / PRINT_INTERVAL != new_val / PRINT_INTERVAL {
+        //     let s = format!("Progress Update: ~{} million steps searched...",
+        //                     new_val / 1_000_000);
+        //     print!("{}{}", s, "\r".repeat(s.len()));
+        // }
     }
 
     let n = graph.node_count();
@@ -263,7 +263,7 @@ fn ham_cycles_levels(l: &Lattice, cyclic: bool) -> Vec<Vec<Vec<usize>>> {
     let mut ret = Vec::new();
 
     for (i, level) in l.levels.iter().enumerate() {
-        println!("Processing level {}/{}", i + 1, num_levels);
+        // println!("Processing level {}/{}", i + 1, num_levels);
 
         let mut graph = Graph::new_undirected();
         let mut node_indices = Vec::new();
@@ -335,7 +335,7 @@ pub fn violation_free(s: &Vec<usize>, cyclic: bool) -> bool {
     // Handle cyclic case where start and end wrap around
     if cyclic && s.first() == s.last() {
         let wrap_val = s[0];
-        
+
         // Mark the wrapped value as visited immediately
         visited.insert(wrap_val);
 
@@ -358,7 +358,7 @@ pub fn violation_free(s: &Vec<usize>, cyclic: bool) -> bool {
 
     // Check the linear segment (or the middle part if cyclic wrapped)
     let slice = &s[start_index..end_index];
-    
+
     // We need to track the previous value to detect group changes
     let mut prev = None;
 
@@ -395,7 +395,7 @@ fn is_subsequence(s1: &Vec<usize>, s2: &Vec<usize>, cyclic: bool) -> bool {
     // If cyclic: search in s2 followed by s2 (simulates wrapping).
     // If not cyclic: search in s2 only.
     let s2_iter = s2.iter();
-    
+
     // We use .chain() to repeat s2 without allocating a new vector
     let mut search_space = if cyclic {
         s2_iter.clone().chain(s2_iter).peekable()
@@ -451,7 +451,7 @@ pub struct Level {
 pub fn rhombic_strips_simple(l: &Lattice, cyclic: bool) -> Vec<Vec<Level>> {
     // 1. Compute all Hamilton cycles for each level
     let ham_cycles = ham_cycles_levels(l, cyclic);
-    println!("Hamilton cycles found");
+    // println!("Hamilton cycles found");
 
     // Temporary storage for candidates (Dimension -> List of (Faces, BridgesUp, BridgesDown))
     let mut levels_raw = Vec::with_capacity(ham_cycles.len());

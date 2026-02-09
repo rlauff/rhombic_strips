@@ -1,4 +1,3 @@
-
 mod lattice;
 use crate::lattice::*;
 
@@ -6,6 +5,8 @@ mod rhombic;
 use crate::rhombic::*;
 
 use std::time::Instant;
+use std::env;
+use std::fs::read_to_string;
 
 use colored::Colorize;
 
@@ -79,56 +80,114 @@ fn reduced(mut s: Vec<usize>) -> Vec<usize> {
     ret
 }
 
+// Logic extracted from original main to reuse for both single lattice files and graph lists
+fn process_and_count(l: &Lattice) {
+    // 2. Compute the Rhombic Strips structure
+    let start = Instant::now();
+    // parameters: lattice, cyclic=true, find_all=false
+    let levels = rhombic_strips_simple(&l, true);
+    let duration = start.elapsed();
+
+    let s = format!("Computed strip structure in {:?}", duration);
+    println!("{}", s);
+
+    if levels.is_empty() {
+        println!("{}", "No rhombic strips found.".red());
+        return;
+    }
+
+    // 3. Count solutions using DFS with Memoization
+    let mut memo: Vec<Vec<Option<u128>>> = levels.iter()
+    .map(|layer| vec![None; layer.len()])
+    .collect();
+
+    let mut total_solutions: u128 = 0;
+
+    // We start looking for paths at the bottom layer (Level 0)
+    for (i, node) in levels[0].iter().enumerate() {
+        // Calculate how many valid strips start with this specific cycle
+        let count = count_paths(0, i, &levels, &mut memo);
+
+        if count > 0 {
+            // Optional: print detailed cycle info if needed
+            // println!("  Cycle {:?}: found {} strip(s)", node.faces, count);
+            total_solutions += count;
+        }
+    }
+
+    if total_solutions == 0 {
+        println!("{}", format!("Total Rhombic Strips found: {}", total_solutions).red());
+    } else {
+        println!("{}", format!("Total Rhombic Strips found: {}", total_solutions).green());
+    }
+}
 
 
 fn main() {
-    // Files to process
-    let input_files = vec!["cube3d", "cube4d"];
+    // Collect args
+    let args: Vec<String> = env::args().collect();
+    let mut centered = false;
+    let mut input_files = Vec::new();
+
+    // Simple argument parsing
+    for arg in args.iter().skip(1) {
+        if arg == "--centered" {
+            centered = true;
+        } else {
+            input_files.push(arg.clone());
+        }
+    }
+
+    // Default if no files provided
+    if input_files.is_empty() {
+        input_files = vec!["cube3d".to_string(), "cube4d".to_string()];
+    }
 
     for filename in input_files {
         println!("========================================");
+        println!("Processing file: {}", filename);
 
-        // 1. Load the lattice using the new function
-        let l = lattice_from_file(filename);
-        println!("Lattice loaded from {}. Dimension: {}", filename, l.dim);
-
-        // 2. Compute the Rhombic Strips structure
-        let start = Instant::now();
-        // parameters: lattice, cyclic=true, find_all=false
-        let levels = rhombic_strips_simple(&l, true);
-        let duration = start.elapsed();
-
-        println!("Computed strip structure in {:?}", duration);
-
-        if levels.is_empty() {
-            println!("No rhombic strips found.");
-            continue;
-        }
-
-        // 3. Count solutions using DFS with Memoization
-        // The structure is a DAG (Directed Acyclic Graph).
-        // We use memoization to avoid re-calculating the number of paths for the same node multiple times.
-        // memo[layer_index][node_index] -> Option<Number of paths to top>
-        let mut memo: Vec<Vec<Option<u128>>> = levels.iter()
-            .map(|layer| vec![None; layer.len()])
-            .collect();
-
-        let mut total_solutions: u128 = 0;
-
-        println!("\nBreakdown by 0-dimensional layer (Hamilton Cycles):");
-
-        // We start looking for paths at the bottom layer (Level 0)
-        for (i, node) in levels[0].iter().enumerate() {
-            // Calculate how many valid strips start with this specific cycle
-            let count = count_paths(0, i, &levels, &mut memo);
-
-            if count > 0 {
-                println!("  Cycle {:?}: found {} strip(s)", node.faces, count);
-                total_solutions += count;
+        // Determine if file is a Graph list or a Lattice definition
+        // Heuristic: check if the first non-empty line starts with "[("
+        let content = match read_to_string(&filename) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("Error reading file {}: {}", filename, e);
+                continue;
             }
+        };
+
+        let first_line = content.lines().find(|l| !l.trim().is_empty());
+        let is_graph_file = match first_line {
+            Some(line) => line.trim().starts_with("[("),
+            None => false,
+        };
+
+        if is_graph_file {
+            println!("Detected Graph file format.");
+            let graphs = read_graphs(&filename);
+            let total_graphs = graphs.len();
+
+            for (idx, mut g) in graphs.into_iter().enumerate() {
+                println!("----------------------------------------");
+                println!("{}", format!("Graph ( {} / {} ): Edgelist: {:?}", idx + 1, total_graphs, g.edges).bold().blue());
+
+                // Construct lattice from graph, passing the centered flag
+                let l = lattice_from_graph(&mut g, centered);
+                println!("Lattice constructed. Dimension: {}", l.dim);
+
+                process_and_count(&l);
+            }
+
+        } else {
+            // Assume Standard Lattice File
+            // 1. Load the lattice using the new function
+            let l = lattice_from_file(&filename);
+            println!("Lattice loaded from {}. Dimension: {}", filename, l.dim);
+
+            process_and_count(&l);
         }
 
-        println!("\nTotal Rhombic Strips found: {}", total_solutions);
         println!("========================================\n");
     }
 }
@@ -166,31 +225,50 @@ fn count_paths(
     count
 }
 
-// fn read_graphs(source: &str, centered: bool) -> Vec<Graph> {
-//     let mut graphs: Vec<Graph> = Vec::new();
-//
-//     for edgelist in read_to_string(source).expect("Read failed.").lines() {
-//         let edges_as_strings: Vec<&str> = edgelist[2..edgelist.len()-2].split("), (").collect();
-//         let mut edges: Vec<[usize; 2]> = Vec::new();
-//         for edge_str in edges_as_strings.iter() {
-//             let edge_vec: Vec<usize> = edge_str.split(", ").map(|r| r.parse::<usize>().unwrap()).collect();
-//             edges.push([edge_vec[0], edge_vec[1]]);
-//         }
-//         let mut vertices = Vec::new();
-//         for [a, b] in edges.iter() {
-//             if !vertices.contains(a) {
-//                 vertices.push(*a);
-//             }
-//             if !vertices.contains(b) {
-//                 vertices.push(*b);
-//             }
-//         }
-//         graphs.push(
-//             Graph {
-//                 vertices: vertices,
-//                 edges: edges,
-//                 tubes: None
-//             })
-//     }
-//     graphs
-// }
+fn read_graphs(source: &str) -> Vec<Graph> {
+    let mut graphs: Vec<Graph> = Vec::new();
+
+    for edgelist in read_to_string(source).expect("Read failed.").lines() {
+        if edgelist.trim().is_empty() { continue; }
+
+        // Expected format: [(0, 1), (1, 2), ...]
+        // We strip the outer [( and )] manually or via split
+        let trimmed = edgelist.trim();
+        if !trimmed.starts_with("[(") { continue; } // Skip malformed lines
+
+        // Remove starting "[(" and ending ")]" safely
+        // But the code below uses a split trick that works if the string is exactly standard
+        // edges_as_strings: split by "), (" handles the middle separators
+
+        // We need to handle the start and end of the string to avoid parsing errors
+        let inner = &trimmed[2..trimmed.len()-2];
+
+        let edges_as_strings: Vec<&str> = inner.split("), (").collect();
+        let mut edges: Vec<[usize; 2]> = Vec::new();
+
+        for edge_str in edges_as_strings.iter() {
+            let edge_vec: Vec<usize> = edge_str.split(", ").map(|r| r.parse::<usize>().unwrap()).collect();
+            edges.push([edge_vec[0], edge_vec[1]]);
+        }
+
+        let mut vertices = Vec::new();
+        for [a, b] in edges.iter() {
+            if !vertices.contains(a) {
+                vertices.push(*a);
+            }
+            if !vertices.contains(b) {
+                vertices.push(*b);
+            }
+        }
+        // sorting vertices makes things deterministic
+        vertices.sort();
+
+        graphs.push(
+            Graph {
+                vertices: vertices,
+                edges: edges,
+                tubes: None
+            })
+    }
+    graphs
+}
