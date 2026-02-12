@@ -3,7 +3,6 @@ use std::cmp;
 use rayon::prelude::*;
 use itertools::Itertools;
 
-// Basic helpers remain the same
 fn min_max(a: usize, b: usize) -> (usize, usize) {
     return (cmp::min(a,b), cmp::max(a,b))
 }
