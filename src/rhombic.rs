@@ -1,27 +1,9 @@
-//the actual code to construct the rhombic strip
-
 use crate::lattice::*;
 use std::cmp;
 use rayon::prelude::*;
 use itertools::Itertools;
 
-/*
-                        def orbit(c):
-                        return [c[i:]+c[:i] for i in range(len(c))]
-
-                        def reduced(c):
-                        if c[0] < c[-1] - 1:
-                            c[0], c[-1] = c[-1], c[0]
-                            return reduced(c)
-                            for i in range(len(c)-1):
-                                if c[i] > c[i+1] + 1:
-                                    c[i], c[i+1] = c[i+1], c[i]
-                                    return reduced(c)
-                                    n = max(c) + 1
-                                    return tuple(max(orbit(c), key=lambda x: sum([k*n**i for i,k in enumerate(x)])))*/
-
-
-
+// Basic helpers remain the same
 fn min_max(a: usize, b: usize) -> (usize, usize) {
     return (cmp::min(a,b), cmp::max(a,b))
 }
@@ -43,7 +25,7 @@ fn is_good_for_cycle(indices: &Vec<usize>, n: usize) -> bool {
     true
 }
 
-fn layer_ok(layer: &Vec<usize>) -> bool { //returns wether the list of bridges is ok, i.e. each face appears in an interval along it
+fn layer_ok(layer: &Vec<usize>) -> bool {
     for face in layer {
         if !is_good_for_cycle(&(0..layer.len()).filter(|x| layer[*x] == *face).collect(), layer.len()) {
             return false
@@ -52,7 +34,7 @@ fn layer_ok(layer: &Vec<usize>) -> bool { //returns wether the list of bridges i
     true
 }
 
-fn layer_ok_non_cyclic(layer: &Vec<usize>) -> bool { //returns wether the list of bridges is ok, i.e. each face appears in an interval along it
+fn layer_ok_non_cyclic(layer: &Vec<usize>) -> bool {
     for face in layer {
         if !is_good_for_path(&(0..layer.len()).filter(|x| layer[*x] == *face).collect()) {
             return false
@@ -61,37 +43,10 @@ fn layer_ok_non_cyclic(layer: &Vec<usize>) -> bool { //returns wether the list o
     true
 }
 
-fn replace_by_permutations(v: Vec<usize>) -> Vec<Vec<usize>> {
-    let n = v.len();
-    v.into_iter().permutations(n).collect()
-}
-
-fn gap_assignments_simple(gaps: &Vec<Vec<usize>>, faces: &Vec<usize>) -> Vec<Vec<Vec<usize>>>{
-    let n = gaps.len();
-    let mut active = vec![vec![vec![]; n]];
-    for face in faces.into_iter() {
-        let mut new: Vec<Vec<Vec<usize>>> = vec![];
-        for assignment in active.iter() {
-            for i in (0..n).filter(|i| gaps[*i].contains(face)).into_iter() {
-                let mut new_assignment: Vec<Vec<usize>> = assignment.clone();
-                new_assignment[i].push(*face);
-                new.push(new_assignment);
-            }
-        }
-        active = new;
-    }
-    let mut res = vec![];
-    for a in active.into_iter() {
-        for choice in a.into_iter().map(|x| replace_by_permutations(x)).multi_cartesian_product() {
-            res.push(choice);
-        }
-    }
-    res
-}
-
 fn combine_to_layer(bridges: &Vec<usize>, gaps: &Vec<Vec<usize>>) -> Vec<usize> {
     let mut layer = vec![];
     for i in 0..bridges.len() {
+        // Gaps in lazy iterator come as Vec<usize>, simply push contents
         for elem in gaps[i].iter() {
             layer.push(*elem);
         }
@@ -108,7 +63,7 @@ fn combine_to_layer_non_cyclic(bridges: &Vec<usize>, gaps: &Vec<Vec<usize>>) -> 
         }
         layer.push(bridges[i]);
     }
-    layer.append(&mut gaps[gaps.len()-1].clone()); // the last gap is after the last bridge in the non-cyclic case, while in the cyclic case it is before the first bridge, but since we check for duplicates later it doesn't matter where we put it, so we put it here to avoid an extra if statement in the loop
+    layer.append(&mut gaps[gaps.len()-1].clone()); 
     layer
 }
 
@@ -123,66 +78,93 @@ fn duplicates_removed(v: Vec<usize>) -> Vec<usize> {
     res
 }
 
-//          Indices for the next_layers function, when looking for cyclic strips:
-//
-//  indices:        0    1    2    3    4
-//                  |    |    |    |    |
-//  last_layer:     a    b    c    d    e
-//                    /    /    /    /    /
-//                   /    /    /    /    /
-//  bridges:        a    b    c    d    e
-//                \    \    \    \    \
-//                 \    \    \    \    \
-//  gaps:           a    b    c    d    e
-//                  |    |    |    |    |
-//  indices:        0    1    2    3    4
+/// LAZY GAP ASSIGNMENTS
+/// Instead of returning a huge Vec<Vec<Vec<usize>>>, this returns an Iterator.
+/// Each item yielded is one valid assignment of faces to gaps (with permutations applied).
+/// 
+/// Logic:
+/// 1. Identify valid gap choices for each face.
+/// 2. Use `multi_cartesian_product` to generate assignments of faces to gap indices.
+/// 3. Reconstruct the buckets (gaps).
+/// 4. Permute the faces within each bucket.
+fn gap_assignments_lazy(
+    gaps_allowed: Vec<Vec<usize>>, // gaps_allowed[i] = list of faces allowed in gap i
+    faces_to_place: Vec<usize>
+) -> impl Iterator<Item = Vec<Vec<usize>>> {
+    
+    let n_gaps = gaps_allowed.len();
+    
+    // Invert the mapping: For each face, which gap indices allow it?
+    // choices_per_face[k] = list of gap indices that can accept faces_to_place[k]
+    let choices_per_face: Vec<Vec<usize>> = faces_to_place.iter().map(|&face| {
+        (0..n_gaps).filter(|&i| gaps_allowed[i].contains(&face)).collect()
+    }).collect();
 
-pub fn _next_layers_simple_cyclic(last_layer: &Vec<usize>, l: &Lattice) -> Vec<Vec<usize>> {
-    //println!("{:?}", last_layer.clone().into_iter().map(|i| l.faces[i].label.clone()).collect::<Vec<_>>());
+    // 1. Distribute faces to gaps
+    choices_per_face.into_iter()
+        .multi_cartesian_product()
+        .map(move |assignment_indices| {
+            // Reconstruct the buckets based on the indices chosen
+            let mut buckets = vec![vec![]; n_gaps];
+            // assignment_indices[k] is the gap index chosen for faces_to_place[k]
+            for (face_idx, &gap_idx) in assignment_indices.iter().enumerate() {
+                buckets[gap_idx].push(faces_to_place[face_idx]);
+            }
+            buckets
+        })
+        // 2. Permute faces within the gaps
+        .flat_map(|buckets| {
+             // buckets is Vec<Vec<usize>>. We need the cartesian product of permutations of each inner vec.
+             // We map each bucket to an iterator of its permutations.
+             buckets.into_iter()
+                .map(|b| b.clone().into_iter().permutations(b.len())) 
+                .multi_cartesian_product() // This generates the combinations of the permutations
+        })
+}
+
+/// Lazy generator for Cyclic next layers
+pub fn next_layers_cyclic_lazy<'a>(last_layer: &'a Vec<usize>, l: &'a Lattice) -> impl Iterator<Item = Vec<usize>> + 'a {
+    // Basic validations
+    if last_layer.is_empty() {
+         // Return an empty iterator if input is invalid
+         return itertools::Either::Left(std::iter::empty()); 
+    }
+
     let dim = l.faces[last_layer[0]].dim;
     let n = last_layer.len();
     let bridges: Vec<_> = (0..n).map(|x| l.bridges[&min_max(last_layer[x], last_layer[(x+1)%n])]).collect();
-    if !layer_ok(&bridges) { return vec![] };
-    let faces_left: &Vec<_> = &l.levels[dim+1].clone().into_iter().filter(|x| !bridges.contains(x)).collect();
+    
+    if !layer_ok(&bridges) { 
+        return itertools::Either::Left(std::iter::empty()); 
+    };
+
+    let faces_left: Vec<_> = l.levels[dim+1].clone().into_iter().filter(|x| !bridges.contains(x)).collect();
     let gaps: Vec<_> = (0..n).map(|i| l.faces[last_layer[i]].upset.clone().into_iter().filter(|x| !bridges.contains(x)).collect::<Vec<_>>()).collect();
 
-    gap_assignments_simple(&gaps, &faces_left)
-        .iter()
-        .map(|x| combine_to_layer(&bridges, x))
+    // We use the lazy generator
+    // We map the results immediately to the combined layer and filter/dedup
+    let iter = gap_assignments_lazy(gaps, faces_left)
+        .map(move |x| combine_to_layer(&bridges, &x)) // combine uses the bridges captured by move
         .filter(|x| layer_ok(x))
-        .map(|x| duplicates_removed(x))
-        .collect()
+        .map(|x| duplicates_removed(x));
+
+    itertools::Either::Right(iter)
 }
 
-
-//          Indices for the next_layers function, when looking for non-cyclic strips:
-//
-//  indices:        0    1    2    3    4
-//                  |    |    |    |    |
-//  last_layer:     a    b    c    d    e
-//                    /    /    /    /    
-//                   /    /    /    /    
-//  bridges:        a    b    c    d    
-//                \    \    \    \    \
-//                 \    \    \    \    \
-//  gaps:           a    b    c    d    e
-//                  |    |    |    |    |
-//  indices:        0    1    2    3    4
-
-pub fn next_layers_simple_non_cyclic(last_layer: &Vec<usize>, l: &Lattice) -> Vec<Vec<usize>> {
+/// Lazy generator for Non-Cyclic next layers
+pub fn next_layers_non_cyclic_lazy<'a>(last_layer: &'a Vec<usize>, l: &'a Lattice) -> impl Iterator<Item = Vec<usize>> + 'a {
     assert!(!last_layer.is_empty());
     let dim = l.faces[last_layer[0]].dim;
     let n = last_layer.len();
-    // generate the bridges. Note that the range goes from 0 to n-2 inclusive, because in this case the number of bridges is n-1
+    
     let bridges: Vec<_> = (0..n-1)
-        // replace each index x by the bridge connecting positions x and x+1
         .map(|x| l.bridges[&min_max(last_layer[x], last_layer[x+1])])
         .collect();
 
-    // if the last layer is not ok (violating the interval property), then no next layer will be valid
-    if !layer_ok_non_cyclic(&bridges) { return vec![] };   
+    if !layer_ok_non_cyclic(&bridges) { 
+        return itertools::Either::Left(std::iter::empty()); 
+    };   
 
-    // generate the faces which remain. These need to be assigned to the gaps later
     let mut faces_left = Vec::with_capacity(l.levels[dim+1].len());
     for x in l.levels[dim+1].iter() {
         if !bridges.contains(x) {
@@ -190,7 +172,6 @@ pub fn next_layers_simple_non_cyclic(last_layer: &Vec<usize>, l: &Lattice) -> Ve
         }
     }
 
-    // generate the list of gaps. These contain, a gap is the subset of faces from faces_left which can go in that place
     let mut gaps = Vec::new();
     for i in 0..n {
         let mut new_gap = Vec::with_capacity(l.faces[last_layer[i]].upset.len());
@@ -202,257 +183,76 @@ pub fn next_layers_simple_non_cyclic(last_layer: &Vec<usize>, l: &Lattice) -> Ve
         gaps.push(new_gap);
     }
 
-    // itereate over all gap_assignments and build the possible next layers
-    gap_assignments_simple(&gaps, &faces_left)
-        .iter()
-        .map(|x| combine_to_layer_non_cyclic(&bridges, x))
+    let iter = gap_assignments_lazy(gaps, faces_left)
+        .map(move |x| combine_to_layer_non_cyclic(&bridges, &x))
         .filter(|x| layer_ok_non_cyclic(x))
-        .map(|x| duplicates_removed(x))
+        .map(|x| duplicates_removed(x));
+
+    itertools::Either::Right(iter)
+}
+
+// The main function replacing rhombic_strips_dfs_simple
+pub fn rhombic_strips_dfs_lazy(
+    strip: Vec<Vec<usize>>, 
+    l: &Lattice, 
+    max_dim: usize, 
+    cyclic: bool
+) -> Vec<Vec<Vec<usize>>> {
+
+    // Base case: if we reached the max dimension, return the current strip
+    if max_dim == strip.len() - 1 {
+        return vec![strip];
+    }
+
+    // Get the lazy iterator for the next layers
+    // We cannot use a simple 'if' assignment because the iterator types differ
+    let next_layers_iter: Box<dyn Iterator<Item = Vec<usize>> + Send> = if cyclic {
+        Box::new(next_layers_cyclic_lazy(&strip[strip.len()-1], l))
+    } else {
+        Box::new(next_layers_non_cyclic_lazy(&strip[strip.len()-1], l))
+    };
+
+    // Use par_bridge() to parallelize the consumption of the lazy iterator.
+    // This allows us to process branches in parallel as they are generated,
+    // without ever storing all possible next layers in memory at once.
+    next_layers_iter.par_bridge()
+        .map(|next_layer| {
+            let mut new_strip = strip.clone();
+            new_strip.push(next_layer);
+            rhombic_strips_dfs_lazy(new_strip, l, max_dim, cyclic)
+        })
+        .flatten()
         .collect()
 }
 
-pub fn rhombic_strips_dfs_simple(strip: Vec<Vec<usize>>, l: &Lattice, max_dim: usize, cyclic: bool) -> Vec<Vec<Vec<usize>>> {
-
-    if max_dim == strip.len()-1 {
-        //println!("{:?}", strip);
-        return vec![strip];
-
-    };
-    let mut continuations = vec![];
-    let next_function = if cyclic { _next_layers_simple_cyclic } else { next_layers_simple_non_cyclic };
-
-    for next_layer in next_function(&strip[strip.len()-1], l).into_iter() {
-        let mut new_strip = strip.clone();
-        new_strip.push(next_layer);
-        continuations.push(new_strip);
-    }
-    continuations.into_par_iter().map(|x| rhombic_strips_dfs_simple(x, l, max_dim, cyclic)).flatten().collect()
-}
-
+/// Optimized Existence Check using Lazy Generation + ParBridge
 pub fn rhombic_strip_exists(
-    current_layer: &Vec<usize>, // Only the most recent layer is needed
-    current_dim: usize,      // Tracks the current depth/dimension manually
+    current_layer: &Vec<usize>, 
+    current_dim: usize, 
     l: &Lattice, 
     max_dim: usize, 
     cyclic: bool
 ) -> bool {
 
-    // Base case: If we have reached the target dimension, a strip exists
     if current_dim == max_dim {
         return true;
     }
 
-    let next_function = if cyclic { _next_layers_simple_cyclic } else { next_layers_simple_non_cyclic };
+    // Since our next_layers functions now return Iterators, we cannot assign them to a variable easily
+    // because the types of the iterators differ (opaque types).
+    // We simply branch the logic here.
     
-    // Generate the potential next layers based only on the current layer
-    let next_layers = next_function(current_layer, l);
-
-    // Use par_iter with any() to check paths in parallel without storing them.
-    // This returns true immediately if any branch finds a solution.
-    next_layers.par_iter().any(|next_layer| {
-        rhombic_strip_exists(next_layer, current_dim + 1, l, max_dim, cyclic)
-    })
+    if cyclic {
+        let next_iter = next_layers_cyclic_lazy(current_layer, l);
+        // par_bridge converts the sequential iterator into a parallel one.
+        // It pulls items from the iterator on one thread and distributes processing to others.
+        next_iter.par_bridge().any(|next_layer| {
+            rhombic_strip_exists(&next_layer, current_dim + 1, l, max_dim, cyclic)
+        })
+    } else {
+        let next_iter = next_layers_non_cyclic_lazy(current_layer, l);
+        next_iter.par_bridge().any(|next_layer| {
+            rhombic_strip_exists(&next_layer, current_dim + 1, l, max_dim, cyclic)
+        })
+    }
 }
-
-
-
-
-
-
-
-
-
-
-
-// struct GapAssignments {
-//     gaps: Vec<Vec<Vec<usize>>>,
-//     num_faces: usize,
-//     counter: Vec<usize>,
-//     seen_zero: bool, //dirty, find a better way
-// }
-//
-// //Gap_assignment needs alg X, else it is too slow
-//
-// impl GapAssignments {
-//
-//     fn advance_counter(&mut self, full_until: usize) -> bool { //return false if there was an overflow, else true
-//         if full_until >= self.gaps.len() { return false };
-//         if self.counter[full_until] == self.gaps[full_until].len()-1 { return self.advance_counter(full_until+1) };
-//         self.counter[full_until] += 1;
-//         for i in 0..full_until {
-//             self.counter[i] = 0;
-//         }
-//         true
-//     }
-//
-//     fn next(&mut self) -> usize { //0: no success, 1: success, 2: done
-//         if self.seen_zero {
-//             if !self.advance_counter(0) {
-//                 return 2;
-//             };
-//         };
-//         self.seen_zero = true;
-//         let mut all_seen = vec![];
-//         let assignment: Vec<_> = (0..self.gaps.len()).map(|x| self.gaps[x][self.counter[x]].clone()).collect();  //this clone might be avoidable
-//         for g in assignment.iter() {
-//             for elem in g.iter() {
-//                 if all_seen.contains(elem) {
-//                     return 0;
-//                 };
-//                 all_seen.push(*elem);
-//             }
-//         }
-//         if all_seen.len() != self.num_faces {
-//             return 0;
-//         }
-//         1
-//     }
-//
-// }
-
-// pub fn test_GapAssignments() {
-//     let mut g = GapAssignments {
-//         gaps: vec![vec![vec![1,2,3], vec![1], vec![2]], vec![vec![1], vec![2], vec![3]], vec![vec![1], vec![3]]],
-//         all_faces: vec![],
-//         counter: vec![0,0,0],
-//     };
-//     while g.next() {
-//         println!("{:?}", g.counter);
-//     }
-// }
-
-// fn min_one_mod_n(i: &usize, n: &usize) -> usize {
-//     match i {
-//         0 => { n-1 },
-//         _ => { i-1 },
-//     }
-// }
-
-
-
-
-
-
-
-// //try dfs for this, might be faster
-// fn gap_assignments_non_simple(gap: &Vec<usize>, start: usize, end: usize, l: &Lattice) -> Vec<Vec<usize>>{
-//     //all possible paths across this gap as a vector. The graph is encoded in the lattice as the keys of the bridges object
-//
-//     if gap.len() == 0 { return vec![vec![]]; };
-//     if start == end { return vec![vec![]] };
-//
-//     let g: Vec<usize> = gap.into_iter().map(|x| x.clone()).collect();
-//     let mut result: Vec<Vec<usize>> = vec![];
-//     if l.bridges.contains_key(&min_max(start, end)) { result.push(vec![]); };
-//
-//     let mut active: Vec<Vec<usize>> = g.clone().into_iter().filter(|x| l.bridges.contains_key(&min_max(start, *x))).map(|x| vec![x]).collect();
-//     let mut new = vec![];
-//
-//     while active.len() != 0 {
-//         new.clear();
-//         for path in active.into_iter() {
-//             let p_head = path[path.len()-1];
-//             if l.bridges.contains_key(&min_max(p_head, end)) {
-//                 result.push(path.clone());
-//             }
-//             for face in g.iter() {
-//                 if !path.contains(face) && l.bridges.contains_key(&min_max(p_head, *face)) {
-//                     let mut new_path = path.clone();
-//                     new_path.push(*face);
-//                     new.push(new_path);
-//                 }
-//             }
-//         }
-//         active = new.clone();
-//     }
-//     result
-// }
-
-
-
-
-// pub fn next_layers_non_simple(last_layer: &Vec<usize>, l: &Lattice) -> Vec<Vec<usize>> {
-//     let dim = l.faces[last_layer[0]].dim;
-//     let n = last_layer.len();
-//     let bridges_option: Vec<_> = (0..n).map(|x| l.bridges[&min_max(last_layer[x], last_layer[(x+1)%n])]).collect();
-//     let mut bridges = vec![0; n];
-//     for i in 0..n {
-//         if !bridges_option[i].is_none() {
-//             let mut last_bridge = bridges_option[i].unwrap();
-//             for j in 0..n {
-//                 if bridges_option[(i+j)%n].is_none() {
-//                     bridges[(i+j)%n] = last_bridge;
-//                 } else {
-//                     last_bridge = bridges_option[(i+j)%n].unwrap();
-//                     bridges[(i+j)%n] = last_bridge;
-//
-//                 }
-//             }
-//             break
-//         }
-//     }
-//     if !layer_ok(&bridges) { return vec![] };
-//     //let faces_left: Vec<_> = <Vec<usize> as Clone>::clone(&l.levels[dim+1]).into_iter().filter(|x| !bridges.contains(x)).collect();
-//     let gaps: Vec<_> = (0..n).map(|i| l.faces[last_layer[i]].upset.clone().into_iter().filter(|x| !bridges.contains(x)).collect::<Vec<_>>()).collect();
-//     let assignments: Vec<Vec<Vec<usize>>> = (0..n).map(|i| gap_assignments_non_simple(&gaps[i], bridges[min_one_mod_n(&i, &n)], bridges[i], l)).collect::<Vec<_>>();
-//
-//     // println!("{:?}", gaps);
-//     // println!("{:?}", assignments);
-//
-//     let mut g = GapAssignments {
-//         gaps: assignments,
-//         num_faces: l.levels[dim+1].iter().filter(|x| !bridges.contains(x)).collect::<Vec<_>>().len(),
-//         counter: vec![0; last_layer.len()],
-//         seen_zero: false,
-//     };
-//     let mut layers = vec![];
-//
-//     loop {
-//         match g.next() {
-//             0 => (),
-//             1 => layers.push(combine_to_layer(&bridges, &(0..g.gaps.len()).map(|x| g.gaps[x][g.counter[x]].clone()).collect::<Vec<_>>())),
-//             _ => break,
-//         }
-//     }
-//     layers
-// }
-//
-// pub fn rhombic_strips_dfs_non_simple(strip: Vec<Vec<usize>>, l: &Lattice, max_dim: usize) -> Vec<Vec<Vec<usize>>> {
-//
-//     //if strips.len() == 0 { return vec![] };
-//     if max_dim == strip.len()-1 { return vec![strip] };
-//     let mut continuations = vec![];
-//
-//     for next_layer in next_layers_non_simple(&strip[strip.len()-1], l).into_iter() {
-//         let mut new_strip = strip.clone();
-//         new_strip.push(next_layer);
-//         continuations.push(new_strip);
-//     }
-//     continuations.into_par_iter().map(|x| rhombic_strips_dfs_non_simple(x, l, max_dim)).flatten().collect()
-// }
-//
-//
-//
-//
-//
-//
-//
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

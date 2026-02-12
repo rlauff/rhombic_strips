@@ -1,9 +1,13 @@
 
 mod lattice;
+use std::os::unix::process;
+
 use crate::lattice::*;
 
 mod rhombic;
 use crate::rhombic::*;
+
+
 
 fn main() {
     // read in source
@@ -12,21 +16,25 @@ fn main() {
     // check for flags
     let cyclic = std::env::args().any(|arg| arg == "--cyclic"); // restrict to cyclic rhombic strips
     let count = std::env::args().any(|arg| arg == "--count");   // find all rhombic strips and print their number
-    let show = std::env::args().any(|arg| arg == "--show");     // print out the found strips
+    let show = std::env::args().any(|arg| arg == "--show");     // print out the found strips (only one if not count and not split)
     let split = std::env::args().any(|arg| arg == "--split");   // find all and split the amount among the hamilton cycles
 
+    process_lattice(source, cyclic, count, show, split);
+}
+
+fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, split: bool) {
     let l = lattice_from_file(&source, cyclic);
 
     let mut number_found = 0;
     for ham in l.ham.iter() {
-        if !count && !split {
+        if !count && !split && !show {
             if rhombic_strip_exists(&ham.clone(), 0, &l, l.dim.clone(), cyclic) {
                 println!("A rhombic strip was found");
                 number_found = 1;
                 break;
             }
         } else {
-            let new = rhombic_strips_dfs_simple(vec![ham.clone()], &l, l.dim.clone(), cyclic);
+            let new = rhombic_strips_dfs_lazy(vec![ham.clone()], &l, l.dim.clone(), cyclic);
             number_found += new.len();
             if split {
                 println!("{:?}: {}", ham.iter().map(|x| l.faces[*x].label.clone()).collect::<Vec<_>>(), new.len());
