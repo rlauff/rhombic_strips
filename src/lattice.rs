@@ -11,23 +11,23 @@ use std::str;
 #[derive(Debug)]
 pub struct Face {
     pub label: String,
-    pub dim: usize,
-    pub upset: Vec<usize>,
-    pub downset: Vec<usize>,
+    pub dim: u8,
+    pub upset: [u8; 50],        // fixed size arrays for better caching. 255 indicates empty
+    pub downset: [u8; 50],
 }
 
 #[derive(Debug)]
 pub struct Lattice {
     pub faces: Vec<Face>,
-    pub levels: Vec<Vec<usize>>,
-    pub bridges: HashMap<(usize, usize), usize>,
-    pub dim: usize,
-    pub ham: Vec<Vec<usize>>,
+    pub levels: [[u8; 50]; 30], // fixed size arrays for better caching. 255 indicates empty
+    pub bridges: [u8; 100*100], // max number of faces is 100, so we can store the bridges in a 100x100 array. 255 indicates no bridge, otherwise the value is the index of the bridge face
+    pub dim: u8,
+    // pub ham: Vec<Vec<u8>>, // to be exchanged for a impl iter that generates the hamilton paths on the fly, since storing them can be very memory intensive for large lattices
 }
 
 //bridges are precomputed and stored in the face lattice object. Note that the keys of the bridges HashMap are the edges of the graphs on this levels
 
-fn bridge(faces: &Vec<Face>, f1: usize, f2: usize) -> Option<usize> {
+fn bridge(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<usize> {
     for (i, face) in faces.iter().enumerate() {
         if face.downset.contains(&f1) && face.downset.contains(&f2) {
             return Some(i);
@@ -42,26 +42,30 @@ pub fn lattice_from_file(file: &str, cyclic: bool) -> Lattice {
     for face_str in read_to_string(file).expect("reading file failed").lines() {
         
         //dimension
-        let dim = face_str.split(": ").nth(0).expect("reading of a face failed, check lattice file").parse::<usize>().expect("something was not an integer");
+        let dim = face_str.split(": ").nth(0).expect("reading of a face failed, check lattice file").parse::<u8>().expect("something was not an integer");
 
         //upset
         let upset_str = face_str.split("{").nth(1).expect("reading of a face failed, check lattice file");
-        let upset;
-        if upset_str.len() == 3 {
-            upset = vec![];
-        } else {
-            upset = upset_str[..upset_str.len()-3].split(", ")
-            .map(|x| x.parse::<usize>().expect("something was not an integer")).collect();
+        let mut upset = [255u8; 50]; // Initialize with 255 (empty indicator)
+        for face_index in upset_str[..upset_str.len()-3].split(", ") {
+            let index = face_index.parse::<usize>().expect("something was not an integer");
+            if index < 50 {
+                upset[index] = index as u8; // Store the index directly
+            } else {
+                panic!("Upset index exceeds maximum allowed value of 49");
+            }
         }
 
         //downset
         let downset_str = face_str.split("{").nth(2).expect("reading of a face failed, check lattice file");
-        let downset;
-        if downset_str.len() == 1 {
-            downset = vec![];
-        } else {
-            downset = downset_str[..downset_str.len()-1].split(", ")
-            .map(|x| x.parse::<usize>().expect("something was not an integer")).collect();
+        let mut downset = [255u8; 50]; // Initialize with 255 (empty indicator)
+        for face_index in downset_str[..downset_str.len()-3].split(", ") {
+            let index = face_index.parse::<usize>().expect("something was not an integer");
+            if index < 50 {
+                downset[index] = index as u8; // Store the index directly
+            } else {
+                panic!("Downset index exceeds maximum allowed value of 49");
+            }
         }
 
         faces.push(
@@ -76,351 +80,223 @@ pub fn lattice_from_file(file: &str, cyclic: bool) -> Lattice {
 
     //make levels
     let max_dim = faces.iter().map(|x| x.dim).max().unwrap();
-    let mut levels = vec![vec![]; max_dim+1];
+    let mut levels = [[255u8; 50]; 30]; // Initialize with 255 (empty indicator)
+    let mut count_per_dim = [0u8; 30]; // To keep track of how many faces we have added to each dimension level
     for (i, face) in faces.iter().enumerate() {
-        levels[face.dim].push(i);
+        levels[face.dim as usize][count_per_dim[face.dim as usize] as usize] = i as u8; // Store the index directly
+        count_per_dim[face.dim as usize] += 1;
     }
 
     //generate and store bridges
-    let mut bridges = HashMap::new();
+    let mut bridges = [255u8; 100*100]; // Initialize with 255 (no bridge indicator)
     for i in 0..faces.len() {
         for j in 0..faces.len() {
             if i >= j { continue };
-            // if i == j {
-            //     bridges.insert((i,j), None);
-            // }
-            let b = bridge(&faces, i, j);
-            if !b.is_none() {
-                bridges.insert((i,j), b.unwrap());
-                bridges.insert((j,i), b.unwrap());
-            };
+           if let Some(b) = bridge(&faces, i as u8, j as u8) {
+                bridges[i*100 + j] = b as u8;
+                bridges[j*100 + i] = b as u8;
+            }
         }
     }
 
-    let mut l = Lattice {
+    let l = Lattice {
         faces: faces,
         levels: levels,
         bridges: bridges,
         dim: max_dim,
-        ham: vec![],
     };
-    l.gen_ham(cyclic);
     l
 }
 
 impl Lattice {
-    // fill the ham field with the hamilton paths or cycles of the first layer
-    // if cyclic is true, generate hamilton cycles, otherwise generate hamilton paths
-    // written by gemini, but looks correct to me
-    pub fn gen_ham(&mut self, cyclic: bool) -> Vec<Vec<usize>> {
-        //check if the first layer exists and has nodes
-        if self.levels.is_empty() || self.levels[0].is_empty() {
-            return vec![];
+    // Create an iterator that generates hamilton paths or cycles lazily
+    // This avoids allocating a massive Vec<Vec<usize>> and allows stopping early
+    pub fn ham_paths(&self, cyclic: bool) -> HamiltonianIter {
+        // check if the first layer exists
+        // we filter out 255 (empty slots) to get actual nodes
+        let nodes: Vec<u8> = self.levels[0]
+            .iter()
+            .filter(|&&n| n != 255)
+            .cloned()
+            .collect();
+
+        if nodes.is_empty() {
+            return HamiltonianIter::empty();
         }
-        
-        //get the nodes of the first layer
-        let nodes = self.levels[0].clone();
+
+        // build adjacency list for faster lookups during iteration
+        // since max faces is 100, we can use a direct vector index
+        let mut adj: Vec<Vec<u8>> = vec![vec![]; 100]; 
         let num_nodes = nodes.len();
 
-        //build adjacency list for faster lookups during dfs
-        let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
-        for &node in &nodes {
-            adj.insert(node, vec![]);
-        }
-
-        //populate adjacency list using the precomputed bridges
+        // populate adjacency list using the precomputed bridges matrix
         for i in 0..num_nodes {
             for j in (i + 1)..num_nodes {
                 let u = nodes[i];
                 let v = nodes[j];
                 
-                //keys in bridges are always (smaller, larger) as generated in lattice_from_file
-                let key = if u < v { (u, v) } else { (v, u) };
+                // check bridges array (flattened 100x100)
+                // we check both directions u->v and v->u just to be safe
+                let idx1 = (u as usize) * 100 + (v as usize);
+                let idx2 = (v as usize) * 100 + (u as usize);
                 
-                if self.bridges.contains_key(&key) {
-                    adj.get_mut(&u).unwrap().push(v);
-                    adj.get_mut(&v).unwrap().push(u);
+                let connected = (idx1 < self.bridges.len() && self.bridges[idx1] != 255) ||
+                                (idx2 < self.bridges.len() && self.bridges[idx2] != 255);
+
+                if connected {
+                    adj[u as usize].push(v);
+                    adj[v as usize].push(u);
                 }
             }
         }
 
-        let mut all_paths = vec![];
-        //visited array using the size of all faces so we can directly index by face id
-        let mut visited = vec![false; self.faces.len()];
+        HamiltonianIter::new(nodes, adj, cyclic)
+    }
+}
 
-        if cyclic {
-            //for cycles, we only need to start from one node since a cycle must include it anyway
-            let start_node = nodes[0];
-            let mut path = vec![start_node];
-            visited[start_node] = true;
-            
-            self.dfs(start_node, start_node, &mut visited, &mut path, num_nodes, &adj, true, &mut all_paths);
-        } else {
-            //for paths, we have to try starting from every possible node
-            for &start_node in &nodes {
-                let mut path = vec![start_node];
-                visited[start_node] = true;
-                
-                self.dfs(start_node, start_node, &mut visited, &mut path, num_nodes, &adj, false, &mut all_paths);
-                
-                //reset for the next start node
-                visited[start_node] = false; 
-            }
-        }
+// Iterator struct to hold the state of the DFS
+pub struct HamiltonianIter {
+    nodes: Vec<u8>,         // List of valid nodes in the layer
+    adj: Vec<Vec<u8>>,      // Adjacency list
+    cyclic: bool,           // Mode: cycle or path
+    
+    // DFS State
+    stack: Vec<(u8, usize)>, // (Current Node, Index of next neighbor to try in adj list)
+    path: Vec<u8>,           // Current path being built
+    visited: Vec<bool>,      // Lookup for visited nodes (size 100)
+    
+    // Loop control
+    start_node_index: usize, // Which node in 'nodes' are we currently starting from?
+    finished: bool,
+}
 
-        //store and return
-        self.ham = all_paths.clone();
-        all_paths
+impl HamiltonianIter {
+    fn new(nodes: Vec<u8>, adj: Vec<Vec<u8>>, cyclic: bool) -> Self {
+        let mut iter = HamiltonianIter {
+            nodes,
+            adj,
+            cyclic,
+            stack: Vec::with_capacity(100),
+            path: Vec::with_capacity(100),
+            visited: vec![false; 100],
+            start_node_index: 0,
+            finished: false,
+        };
+        
+        // initialize the first start node
+        iter.push_start_node();
+        iter
     }
 
-    //dfs helper for backtracking through the graph
-    fn dfs(
-        &self,
-        start: usize,
-        current: usize,
-        visited: &mut Vec<bool>,
-        path: &mut Vec<usize>,
-        target_len: usize,
-        adj: &HashMap<usize, Vec<usize>>,
-        cyclic: bool,
-        all_paths: &mut Vec<Vec<usize>>,
-    ) {
-        //if path contains all nodes, we found a path
-        if path.len() == target_len {
-            if cyclic {
-                //for cycles, check if the last node is connected back to the start
-                if adj.get(&current).unwrap().contains(&start) {
-                    all_paths.push(path.clone());
-                }
-            } else {
-                // only push if the first node is smaller than or equal to the last node (equal if only one vertex exists)
-                // this removes duplicates since we will find the same path in reverse when we start from the other end
-                if path[0] <= path[path.len() - 1] {
-                    all_paths.push(path.clone());
-                }
-            }
+    fn empty() -> Self {
+        HamiltonianIter {
+            nodes: vec![], adj: vec![], cyclic: false, 
+            stack: vec![], path: vec![], visited: vec![], 
+            start_node_index: 0, finished: true 
+        }
+    }
+
+    // Helper to reset state and push a new start node
+    fn push_start_node(&mut self) {
+        if self.start_node_index >= self.nodes.len() {
+            self.finished = true;
             return;
         }
 
-        //explore all neighbors of the current node
-        if let Some(neighbors) = adj.get(&current) {
-            for &neighbor in neighbors {
-                if !visited[neighbor] {
-                    visited[neighbor] = true;
-                    path.push(neighbor);
+        // for cycles, we only need to try starting from the very first node
+        // because a cycle is a loop (A-B-C-A is same as B-C-A-B)
+        if self.cyclic && self.start_node_index > 0 {
+            self.finished = true;
+            return;
+        }
 
-                    //go deeper
-                    self.dfs(start, neighbor, visited, path, target_len, adj, cyclic, all_paths);
+        let start_node = self.nodes[self.start_node_index];
+        
+        self.path.clear();
+        self.stack.clear();
+        // clear visited array
+        self.visited.fill(false);
 
-                    //backtrack
-                    path.pop();
-                    visited[neighbor] = false;
+        self.visited[start_node as usize] = true;
+        self.path.push(start_node);
+        self.stack.push((start_node, 0)); // start with 0th neighbor
+    }
+}
+
+impl Iterator for HamiltonianIter {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        // Iterative DFS loop
+        loop {
+            // if stack is empty, we are done with the current start_node
+            // move to the next possible start node
+            if self.stack.is_empty() {
+                self.start_node_index += 1;
+                self.push_start_node();
+                if self.finished {
+                    return None;
+                }
+                continue;
+            }
+
+            // peek at the current node and neighbor index
+            let (u, neighbor_idx) = *self.stack.last().unwrap();
+            let u_idx = u as usize;
+            
+            // if we have explored all neighbors of u, backtrack
+            if neighbor_idx >= self.adj[u_idx].len() {
+                self.stack.pop();
+                self.path.pop();
+                self.visited[u_idx] = false;
+                continue;
+            }
+
+            // prepare to look at the next neighbor next time
+            self.stack.last_mut().unwrap().1 += 1;
+
+            let v = self.adj[u_idx][neighbor_idx];
+            let v_idx = v as usize;
+
+            if !self.visited[v_idx] {
+                // move forward
+                self.visited[v_idx] = true;
+                self.path.push(v);
+                self.stack.push((v, 0));
+
+                // check if path is complete
+                if self.path.len() == self.nodes.len() {
+                    let mut result = None;
+
+                    if self.cyclic {
+                        // check if last node connects back to start
+                        let start = self.path[0];
+                        if self.adj[v_idx].contains(&start) {
+                            result = Some(self.path.clone());
+                        }
+                    } else {
+                        // break symmetry for paths: start <= end
+                        if self.path[0] <= self.path[self.path.len() - 1] {
+                            result = Some(self.path.clone());
+                        }
+                    }
+
+                    // CRITICAL: We must backtrack immediately to allow finding the next solution
+                    // otherwise the loop would get stuck at max depth
+                    self.stack.pop();
+                    self.path.pop();
+                    self.visited[v_idx] = false;
+
+                    // if we found a valid result, return it
+                    if result.is_some() {
+                        return result;
+                    }
                 }
             }
         }
     }
 }
-
-
-// fn subsets<T: Clone>(items: &Vec<T>) -> Vec<Vec<T>> {
-//     (0..items.len())
-//     .map(|count| items.clone().into_iter().combinations(count))
-//     .flatten()
-//     .collect()
-// }
-
-// pub struct Graph {
-//     pub vertices: Vec<usize>,
-//     pub edges: Vec<[usize; 2]>,
-//     pub tubes: Option<Vec<Vec<usize>>>,
-// //    tubings: Option<HashSet<Vec<Vec<usize>>>>,
-// }
-
-// impl Graph {
-//     fn is_connected(&self, vertices: &Vec<usize>) -> bool{
-//         if vertices.is_empty() {return false};
-//         if vertices.len() == 1 {return true};
-//         let mut active = Vec::new();
-//         let mut new = Vec::new();
-//         let mut found = Vec::new();
-//         active.push(vertices[0]);
-//         new.push(vertices[0]);
-
-//         loop{
-//             if active.is_empty() {break;};
-//             new.clear();
-
-//             for v in active.iter() {
-//                 for e in self.edges.iter() {
-//                     if e[0] == *v && !found.contains(&e[1]) && vertices.contains(&e[1]) {found.push(e[1]); new.push(e[1])};
-//                     if e[1] == *v && !found.contains(&e[0]) && vertices.contains(&e[0]) {found.push(e[0]); new.push(e[0])};
-//                 }
-//             }
-//             active = new.clone();
-//         }
-
-//         for v in vertices.iter() {
-//             if !found.contains(v) {return false;};
-//         }
-//         return true;
-//     }
-
-//     pub fn find_tubes(&mut self, centered: bool) {
-//         match self.tubes {
-//             Some(_) => {return;}
-//             None => {
-//                 let mut tubes = vec![];
-//                 for subset in subsets(&self.vertices).iter() {
-//                     if self.is_connected(&subset) && (subset.contains(&0) || !centered) {tubes.push(subset.to_vec());}
-//                 }
-//                 self.tubes = Some(tubes);
-//             }
-//         }
-//         return;
-//     }
-
-//     pub fn ham_cycles(&self) -> Vec<Vec<usize>> {
-//         let mut active_paths = vec![vec![self.vertices[0]]];
-//         let mut new_paths = vec![];
-//         for _i in 0..(self.vertices.len()-1) {
-//             for path in active_paths.iter() {
-//                 for [a, b] in self.edges.iter() {
-//                     if *a == path[path.len()-1] && !path.contains(&b) {
-//                         let mut new = path.clone();
-//                         new.push(*b);
-//                         new_paths.push(new);
-//                     }
-//                     if *b == path[path.len()-1] && !path.contains(&a) {
-//                         let mut new = path.clone();
-//                         new.push(*a);
-//                         new_paths.push(new);
-//                     }
-//                 }
-//             }
-//             active_paths.clear();
-//             active_paths = new_paths.clone();
-//             new_paths.clear();
-//         }
-//         active_paths.into_iter().filter(|x| self.edges.contains(&[x[x.len()-1], self.vertices[0]]) || self.edges.contains(&[self.vertices[0], x[x.len()-1]])).collect()
-//     }
-
-//     pub fn ham_paths_centered(&self) -> Vec<Vec<usize>> {
-//         let V:Vec<_> = self.edges.iter().filter(|x| x[0]==0).collect();
-//         let n = V.len();
-//         V.into_iter().map(|x| x[1]).permutations(n).collect()
-//     }
-// }
-
-// fn is_above(tube1: &Vec<usize>, tube2: &Vec<usize>) -> bool {
-//     if !(tube1.len() == tube2.len()-1) { return false; };
-//     for elem in tube1.iter() {
-//         if !tube2.contains(elem) { return false; };
-//     }
-//     true
-// }
-
-// pub fn lattice_from_graph(g: &mut Graph, centered: bool) -> Lattice {
-//     g.find_tubes(centered);
-//     let tubes = g.tubes.clone().unwrap();
-//     let hcs = if centered { g.ham_paths_centered() } else { g.ham_cycles() };
-
-//     let mut faces = vec![];
-//     for tube in tubes.iter() {
-//         //label
-//         let label = format!("{:?}", tube);
-
-//         //dim
-//         let dim = tube.len()-1;
-
-//         //upset
-//         let mut upset = vec![];
-//         for (i, other_tube) in tubes.iter().enumerate() {
-//             if is_above(tube, other_tube) {
-//                 upset.push(i);
-//             }
-//         }
-
-//         //downset
-//         let mut downset = vec![];
-//         for (i, other_tube) in tubes.iter().enumerate() {
-//             if is_above(other_tube, tube) {
-//                 downset.push(i);
-//             }
-//         }
-//         faces.push(
-//             Face {
-//                 label: label,
-//                 dim: dim,
-//                 upset: upset,
-//                 downset: downset
-//             }
-//         );
-//     }
-//     //make levels
-//     let max_dim = faces.iter().map(|x| x.dim).max().unwrap();
-//     let mut levels = vec![vec![]; max_dim+1];
-//     for (i, face) in faces.iter().enumerate() {
-//         levels[face.dim].push(i);
-//     }
-
-//     //generate and store bridges
-//     let mut bridges = HashMap::new();
-//     for i in 0..faces.len() {
-//         for j in 0..faces.len() {
-//             if i >= j { continue };
-//             // if i == j {
-//             //     bridges.insert((i,j), None);
-//             // }
-//             let b = bridge(&faces, i, j);
-//             if !b.is_none() {
-//                 bridges.insert((i,j), b.unwrap());
-//             };
-//         }
-//     }
-
-//     let mut ham_cycles = vec![];
-//     if !centered {
-//         //ham_cycles
-//         for hc in hcs.into_iter() {
-//             let mut c = vec![];
-//             for elem in hc.iter() {
-//                 for (i, face) in faces.iter().enumerate() {
-//                     if face.label == format!("{:?}", vec![elem]) { c.push(i) };
-//                 }
-//             }
-//             ham_cycles.push(c);
-//         }
-//     } else {
-//         for hc in hcs.into_iter() {
-//             let mut c = vec![];
-//             for v in hc.iter() {
-//                 for (i, face) in faces.iter().enumerate() {
-//                     if face.label == format!("[0, {}]", v) { c.push(i) };
-//                 }
-//             }
-//             ham_cycles.push(c);
-//         }
-//     }
-
-//     Lattice {
-//         faces: faces,
-//         levels: levels,
-//         bridges: bridges,
-//         dim: max_dim,
-//         ham: ham_cycles,
-//     }
-// }
-
-// pub fn get_jobs(source: &str) {
-//     let mut lattices: Vec<Lattice> = vec![];
-//     for job_str in read_to_string(file).expect("reading file failed").split("%%") {
-//         if job_str.chars().nth(0).unwrap() == 'G' { //we have a graph
-//             let edges_str = job_str.split(": ").nth(1).unwrap();
-//
-//         } else { //we have a lattice
-//
-//         }
-//     }
-// }
-
-

@@ -2,14 +2,11 @@ use crate::lattice::*;
 use rayon::prelude::*;
 use std::iter::Iterator;
 
-fn layer_ok(layer: &Vec<usize>, cyclic: bool) -> bool {
+fn layer_ok(layer: &Vec<u8>, cyclic: bool, l: &Lattice) -> bool {
     if layer.is_empty() {
         return true;
     }
-
-    // Optimization: Pre-allocate capacity to avoid reallocations
     let mut groups = Vec::with_capacity(layer.len());
-
     groups.push(layer[0]);
     for &val in layer.iter().skip(1) {
         if val != *groups.last().unwrap() {
@@ -28,11 +25,12 @@ fn layer_ok(layer: &Vec<usize>, cyclic: bool) -> bool {
             }
         }
     }
+    
 
     true
 }
 
-fn combine_to_layer(bridges: &Vec<usize>, gaps: &Vec<Vec<usize>>) -> Vec<usize> {
+fn combine_to_layer(bridges: &Vec<u8>, gaps: &Vec<Vec<u8>>) -> Vec<u8> {
     // Optimization: Calculate exact size needed
     let total_len = bridges.len() + gaps.iter().map(|g| g.len()).sum::<usize>();
     let mut layer = Vec::with_capacity(total_len);
@@ -50,7 +48,7 @@ fn combine_to_layer(bridges: &Vec<usize>, gaps: &Vec<Vec<usize>>) -> Vec<usize> 
     layer
 }
 
-fn duplicates_removed(v: Vec<usize>) -> Vec<usize> {
+fn duplicates_removed(v: Vec<u8>) -> Vec<u8> {
     if v.len() == 0 { return vec![] };
     // Optimization: Pre-allocate capacity
     let mut res = Vec::with_capacity(v.len());
@@ -75,19 +73,19 @@ fn duplicates_removed(v: Vec<usize>) -> Vec<usize> {
 /// 4. Inserting at specific indices covers both "assignment" and "permutation".
 pub struct GapAssignmentIterator {
     // Static data
-    faces_to_place: Vec<usize>,
-    allowed_gaps_per_face: Vec<Vec<usize>>, // Pre-computed optimization
+    faces_to_place: Vec<u8>,
+    allowed_gaps_per_face: Vec<Vec<u8>>, // Pre-computed optimization
     
     // Dynamic state (DFS Stack)
     // Stack stores the decision made at each depth: (gap_index, slot_index)
-    stack: Vec<(usize, usize)>,
+    stack: Vec<(u8, u8)>,
     
     // The current state of assignments. We mutate this in-place.
-    buckets: Vec<Vec<usize>>,
+    buckets: Vec<Vec<u8>>,
     
     // Cursor to resume search after yielding or backtracking.
     // Represents (next_gap_idx, next_slot_idx) to try for the current depth.
-    search_cursor: (usize, usize),
+    search_cursor: (u8, u8),
     
     // State flags
     is_done: bool,
@@ -95,13 +93,13 @@ pub struct GapAssignmentIterator {
 }
 
 impl GapAssignmentIterator {
-    pub fn new(gaps_allowed: Vec<Vec<usize>>, faces_to_place: Vec<usize>) -> Self {
+    pub fn new(gaps_allowed: Vec<Vec<u8>>, faces_to_place: Vec<u8>) -> Self {
         let n_gaps = gaps_allowed.len();
         
         // Invert the mapping: For each face, which gap indices allow it?
         // optimization: allows O(1) access during the tight inner loop
-        let allowed_gaps_per_face: Vec<Vec<usize>> = faces_to_place.iter().map(|&face| {
-            (0..n_gaps).filter(|&i| gaps_allowed[i].contains(&face)).collect()
+        let allowed_gaps_per_face: Vec<Vec<u8>> = faces_to_place.iter().map(|&face| {
+            (0..n_gaps).filter(|&i| gaps_allowed[i].contains(&face)).map(|i| i as u8).collect()
         }).collect();
 
         Self {
@@ -117,7 +115,7 @@ impl GapAssignmentIterator {
 }
 
 impl Iterator for GapAssignmentIterator {
-    type Item = Vec<Vec<usize>>;
+    type Item = Vec<Vec<u8>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Handle edge case: No faces to place. Should yield one empty configuration.
@@ -145,7 +143,7 @@ impl Iterator for GapAssignmentIterator {
                 // Prepare for next iteration: Backtrack one step
                 // We pop the last move and advance the cursor to try the next option
                 let (last_gap, last_slot) = self.stack.pop().unwrap();
-                self.buckets[last_gap].remove(last_slot);
+                self.buckets[last_gap as usize].remove(last_slot as usize);
                 
                 // Resume search at the *next* slot after the one we just used
                 self.search_cursor = (last_gap, last_slot + 1);
@@ -165,7 +163,7 @@ impl Iterator for GapAssignmentIterator {
                 .unwrap_or(allowed_gaps.len());
 
             for &gap_idx in &allowed_gaps[start_gap_idx_in_allowed..] {
-                let bucket_len = self.buckets[gap_idx].len();
+                let bucket_len = self.buckets[gap_idx as usize].len() as u8;
                 
                 // Determine starting slot. 
                 // If we are in the same gap as the cursor, respect the cursor slot.
@@ -183,7 +181,7 @@ impl Iterator for GapAssignmentIterator {
                     let slot_idx = start_slot; // Take the first available slot
                     
                     // Apply move
-                    self.buckets[gap_idx].insert(slot_idx, face);
+                    self.buckets[gap_idx as usize].insert(slot_idx as usize, face);
                     self.stack.push((gap_idx, slot_idx));
 
                     // Reset cursor for the NEXT depth level (start fresh)
@@ -208,7 +206,7 @@ impl Iterator for GapAssignmentIterator {
 
             let (prev_gap, prev_slot) = self.stack.pop().unwrap();
             // Undo the previous move
-            self.buckets[prev_gap].remove(prev_slot);
+            self.buckets[prev_gap as usize].remove(prev_slot as usize);
             
             // Set cursor to try the next possibility for the *previous* face
             self.search_cursor = (prev_gap, prev_slot + 1);
@@ -220,28 +218,30 @@ impl Iterator for GapAssignmentIterator {
 
 // Wrapper function to maintain your API signature
 fn gap_assignments_lazy(
-    gaps_allowed: Vec<Vec<usize>>, 
-    faces_to_place: Vec<usize>
-) -> impl Iterator<Item = Vec<Vec<usize>>> {
+    gaps_allowed: Vec<Vec<u8>>, 
+    faces_to_place: Vec<u8>
+) -> impl Iterator<Item = Vec<Vec<u8>>> {
     GapAssignmentIterator::new(gaps_allowed, faces_to_place)
 }
 
-pub fn next_layers_lazy<'a>(last_layer: &'a Vec<usize>, l: &'a Lattice, cyclic: bool) -> impl Iterator<Item = Vec<usize>> + 'a {
+pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: bool) -> impl Iterator<Item = Vec<u8>> + 'a {
 
-    let dim = l.faces[last_layer[0]].dim;
+    let dim = l.faces[last_layer[0] as usize].dim;
     let n = last_layer.len();
     let bridges_upper = if cyclic { n } else { n - 1 };
     
+    println!("{:?}", last_layer.iter().map(|x| l.faces[*x as usize].label.clone()).collect::<Vec<_>>());
+
     let bridges: Vec<_> = (0..bridges_upper)
-        .map(|x| l.bridges[&(last_layer[x], last_layer[(x+1) % n])])
+        .map(|x| l.bridges[last_layer[x] as usize*100 + last_layer[(x+1) % n] as usize])
         .collect();
 
-    if !layer_ok(&bridges, cyclic) { 
+    if !layer_ok(&bridges, cyclic, l) { 
         return itertools::Either::Left(std::iter::empty()); 
     };   
 
-    let mut faces_left = Vec::with_capacity(l.levels[dim+1].len());
-    for x in l.levels[dim+1].iter() {
+    let mut faces_left = Vec::with_capacity(l.levels[dim as usize +1].len());
+    for x in l.levels[dim as usize +1].iter() {
         if !bridges.contains(x) {
             faces_left.push(*x);
         }
@@ -250,8 +250,8 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<usize>, l: &'a Lattice, cyclic: 
     // Optimization: Pre-allocate vector
     let mut gaps = Vec::with_capacity(n);
     for i in 0..n {
-        let mut new_gap = Vec::with_capacity(l.faces[last_layer[i]].upset.len());
-        for x in l.faces[last_layer[i]].upset.iter() {
+        let mut new_gap = Vec::with_capacity(l.faces[last_layer[i] as usize].upset.len());
+        for x in l.faces[last_layer[i] as usize].upset.iter() {
             if !bridges.contains(x) {
                 new_gap.push(*x);
             }
@@ -261,7 +261,7 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<usize>, l: &'a Lattice, cyclic: 
 
     let iter = gap_assignments_lazy(gaps, faces_left)
         .map(move |x| combine_to_layer(&bridges, &x))
-        .filter(move |x| layer_ok(x, cyclic))
+        .filter(move |x| layer_ok(x, cyclic, l))
         .map(|x| duplicates_removed(x));
 
     itertools::Either::Right(iter)
@@ -269,11 +269,11 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<usize>, l: &'a Lattice, cyclic: 
 
 // The main function replacing rhombic_strips_dfs_simple
 pub fn rhombic_strips_dfs_lazy(
-    strip: Vec<Vec<usize>>, 
+    strip: Vec<Vec<u8>>, 
     l: &Lattice, 
     max_dim: usize, 
     cyclic: bool
-) -> Vec<Vec<Vec<usize>>> {
+) -> Vec<Vec<Vec<u8>>> {
 
     // Base case: if we reached the max dimension, return the current strip
     if max_dim == strip.len() - 1 {
@@ -295,7 +295,7 @@ pub fn rhombic_strips_dfs_lazy(
 
 /// Optimized Existence Check using Lazy Generation + ParBridge
 pub fn rhombic_strip_exists(
-    current_layer: &Vec<usize>, 
+    current_layer: &Vec<u8>, 
     current_dim: usize, 
     l: &Lattice, 
     max_dim: usize, 
