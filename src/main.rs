@@ -27,7 +27,7 @@ fn main() {
 }
 
 fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, split: bool, show_all: bool, show_cyclic: bool) {
-    let l = lattice_from_file(&source, cyclic);
+    let l = lattice_from_file(&source);
 
     let mut number_found = 0;
     for ham in l.ham_paths(cyclic) {

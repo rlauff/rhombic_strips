@@ -229,8 +229,6 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: boo
     let dim = l.faces[last_layer[0] as usize].dim;
     let n = last_layer.len();
     let bridges_upper = if cyclic { n } else { n - 1 };
-    
-    println!("{:?}", last_layer.iter().map(|x| l.faces[*x as usize].label.clone()).collect::<Vec<_>>());
 
     let bridges: Vec<_> = (0..bridges_upper)
         .map(|x| l.bridges[last_layer[x] as usize*100 + last_layer[(x+1) % n] as usize])
@@ -241,8 +239,8 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: boo
     };   
 
     let mut faces_left = Vec::with_capacity(l.levels[dim as usize +1].len());
-    for x in l.levels[dim as usize +1].iter() {
-        if !bridges.contains(x) {
+    for x in l.levels[dim as usize +1].iter().filter(|&&x| x != 255) {
+        if !bridges.contains(&x) {
             faces_left.push(*x);
         }
     }

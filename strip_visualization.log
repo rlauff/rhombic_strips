@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023) (preloaded format=pdflatex 2026.1.8)  16 FEB 2026 15:49
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023) (preloaded format=pdflatex 2026.1.8)  16 FEB 2026 20:36
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -419,21 +419,29 @@ e
 * \@reversemarginfalse
 * (1in=72.27pt=25.4mm, 1cm=28.453pt)
 
+
+LaTeX Font Warning: Font shape `OT1/cmr/m/n' in size <6.55777> not available
+(Font)              size <7> substituted on input line 8.
+
 [1
 
 {/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}]
-(./strip_visualization.aux) ) 
+(./strip_visualization.aux)
+
+LaTeX Font Warning: Size substitutions with differences
+(Font)              up to 0.44223pt have occurred.
+
+ ) 
 Here is how much of TeX's memory you used:
- 12305 strings out of 478087
- 255926 string characters out of 5842651
- 1867388 words of memory out of 6000000
- 32235 multiletter control sequences out of 15000+600000
+ 12641 strings out of 478087
+ 260643 string characters out of 5842651
+ 1891388 words of memory out of 6000000
+ 32571 multiletter control sequences out of 15000+600000
  512287 words of font info for 32 fonts, out of 8000000 for 9000
  14 hyphenation exceptions out of 8191
- 102i,6n,104p,551b,702s stack positions out of 10000i,1000n,20000p,200000b,200000s
-</usr/share/texlive/texmf-dist/fonts/type1/public/
-amsfonts/cm/cmr10.pfb>
-Output written on strip_visualization.pdf (1 page, 15345 bytes).
+ 102i,6n,104p,1274b,706s stack positions out of 10000i,1000n,20000p,200000b,200000s
+</usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb>
+Output written on strip_visualization.pdf (1 page, 13462 bytes).
 PDF statistics:
  16 PDF objects out of 1000 (max. 8388607)
  10 compressed objects within 1 object stream

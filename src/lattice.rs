@@ -5,7 +5,6 @@
 //a face object alone hence makes no sense
 
 use std::fs::read_to_string;
-use std::collections::HashMap;
 use std::str;
 
 #[derive(Debug)]
@@ -27,50 +26,97 @@ pub struct Lattice {
 
 //bridges are precomputed and stored in the face lattice object. Note that the keys of the bridges HashMap are the edges of the graphs on this levels
 
-fn bridge(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<usize> {
+fn bridge(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<u8> {
     for (i, face) in faces.iter().enumerate() {
         if face.downset.contains(&f1) && face.downset.contains(&f2) {
-            return Some(i);
+            return Some(i as u8);
         }
     }
     None
 }
 
-pub fn lattice_from_file(file: &str, cyclic: bool) -> Lattice {
-    //read and store faces as in the file
+pub fn lattice_from_file(file: &str) -> Lattice {
+    // read and store faces as in the file
     let mut faces: Vec<Face> = vec![];
-    for face_str in read_to_string(file).expect("reading file failed").lines() {
-        
-        //dimension
-        let dim = face_str.split(": ").nth(0).expect("reading of a face failed, check lattice file").parse::<u8>().expect("something was not an integer");
+    
+    // We expect the file to exist at the path provided
+    let content = read_to_string(file).expect("reading file failed");
 
-        //upset
-        let upset_str = face_str.split("{").nth(1).expect("reading of a face failed, check lattice file");
+    for face_str in content.lines() {
+        // skip empty lines
+        if face_str.trim().is_empty() { continue; }
+
+        // Split the line into parts: Dim, Label, and the Sets
+        // Example Line: "0: 000: {16, 10, 8}, {}"
+        // We limit the split to 3 parts to keep the sets string intact
+        let parts: Vec<&str> = face_str.splitn(3, ": ").collect();
+        
+        // Safety check to ensure the line format is correct
+        if parts.len() < 3 { continue; } 
+
+        // dimension
+        let dim = parts[0].trim().parse::<u8>().expect("something was not an integer");
+        let label = parts[1].trim().to_string();
+
+        // The third part contains the sets string: "{...}, {...}"
+        let sets_part = parts[2];
+
+        // We split upset and downset using the separator "}, {"
+        // This is more robust than fixed indices.
+        let set_strings: Vec<&str> = sets_part.split("}, {").collect();
+        if set_strings.len() < 2 { 
+            panic!("reading of a face failed, check lattice file sets format"); 
+        }
+
+        // upset
+        // Remove the leading '{' and any surrounding whitespace
+        let upset_clean = set_strings[0].trim_start_matches('{').trim();
         let mut upset = [255u8; 50]; // Initialize with 255 (empty indicator)
-        for face_index in upset_str[..upset_str.len()-3].split(", ") {
-            let index = face_index.parse::<usize>().expect("something was not an integer");
-            if index < 50 {
-                upset[index] = index as u8; // Store the index directly
-            } else {
-                panic!("Upset index exceeds maximum allowed value of 49");
+        let mut upset_count = 0;     // Counter to act as a stack pointer
+
+        if !upset_clean.is_empty() {
+            for face_index_str in upset_clean.split(',') {
+                let trimmed = face_index_str.trim();
+                if trimmed.is_empty() { continue; }
+
+                let val = trimmed.parse::<usize>().expect("something was not an integer");
+                
+                // Logic fix: "push" the value into the next available slot
+                if upset_count < 50 {
+                    upset[upset_count] = val as u8; 
+                    upset_count += 1;
+                } else {
+                    panic!("Upset count exceeds maximum allowed size of 50");
+                }
             }
         }
 
-        //downset
-        let downset_str = face_str.split("{").nth(2).expect("reading of a face failed, check lattice file");
+        // downset
+        // Remove the trailing '}' and any surrounding whitespace
+        let downset_clean = set_strings[1].trim_end_matches('}').trim();
         let mut downset = [255u8; 50]; // Initialize with 255 (empty indicator)
-        for face_index in downset_str[..downset_str.len()-3].split(", ") {
-            let index = face_index.parse::<usize>().expect("something was not an integer");
-            if index < 50 {
-                downset[index] = index as u8; // Store the index directly
-            } else {
-                panic!("Downset index exceeds maximum allowed value of 49");
+        let mut downset_count = 0;     // Counter to act as a stack pointer
+
+        if !downset_clean.is_empty() {
+            for face_index_str in downset_clean.split(',') {
+                let trimmed = face_index_str.trim();
+                if trimmed.is_empty() { continue; }
+
+                let val = trimmed.parse::<usize>().expect("something was not an integer");
+
+                // Logic fix: "push" the value into the next available slot
+                if downset_count < 50 {
+                    downset[downset_count] = val as u8;
+                    downset_count += 1;
+                } else {
+                    panic!("Downset count exceeds maximum allowed size of 50");
+                }
             }
         }
 
         faces.push(
             Face {
-                label: face_str.split(": ").nth(1).expect("reading of a face failed, check lattice file").to_string(),
+                label: label,
                 dim: dim,
                 upset: upset,
                 downset: downset,
@@ -78,23 +124,33 @@ pub fn lattice_from_file(file: &str, cyclic: bool) -> Lattice {
         );
     }
 
-    //make levels
-    let max_dim = faces.iter().map(|x| x.dim).max().unwrap();
+    // make levels
+    let max_dim = faces.iter().map(|x| x.dim).max().unwrap_or(0);
     let mut levels = [[255u8; 50]; 30]; // Initialize with 255 (empty indicator)
     let mut count_per_dim = [0u8; 30]; // To keep track of how many faces we have added to each dimension level
+    
     for (i, face) in faces.iter().enumerate() {
-        levels[face.dim as usize][count_per_dim[face.dim as usize] as usize] = i as u8; // Store the index directly
-        count_per_dim[face.dim as usize] += 1;
+        let d = face.dim as usize;
+        // Check bounds to prevent panics
+        if d < 30 && (count_per_dim[d] as usize) < 50 {
+             levels[d][count_per_dim[d] as usize] = i as u8; // Store the index directly
+             count_per_dim[d] += 1;
+        }
     }
 
-    //generate and store bridges
+    // generate and store bridges
     let mut bridges = [255u8; 100*100]; // Initialize with 255 (no bridge indicator)
     for i in 0..faces.len() {
         for j in 0..faces.len() {
             if i >= j { continue };
-           if let Some(b) = bridge(&faces, i as u8, j as u8) {
-                bridges[i*100 + j] = b as u8;
-                bridges[j*100 + i] = b as u8;
+            
+            // Check if a bridge exists between face i and face j
+            if let Some(b) = bridge(&faces, i as u8, j as u8) {
+                // Bounds check for the flattened array
+                if i * 100 + j < bridges.len() {
+                    bridges[i * 100 + j] = b;
+                    bridges[j * 100 + i] = b;
+                }
             }
         }
     }
