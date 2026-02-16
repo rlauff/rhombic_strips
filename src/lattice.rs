@@ -92,6 +92,7 @@ pub fn lattice_from_file(file: &str, cyclic: bool) -> Lattice {
             let b = bridge(&faces, i, j);
             if !b.is_none() {
                 bridges.insert((i,j), b.unwrap());
+                bridges.insert((j,i), b.unwrap());
             };
         }
     }
