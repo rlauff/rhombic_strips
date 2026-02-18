@@ -1,6 +1,8 @@
+
 use eframe::egui;
 use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::fs;
 
 // Imports as requested
 use crate::lattice::*;
@@ -12,7 +14,7 @@ use crate::plotting::*;
 struct GuiNode {
     id: usize,          // Unique ID for the node
     label: String,      // Display label
-    pos: egui::Pos2,    // Position on the canvas
+    pos: egui::Pos2,    // Position in World Space
     dragged: bool,      // State tracking for drag operations
 }
 
@@ -21,7 +23,7 @@ pub struct LatticeApp {
     // Graph Data
     nodes: Vec<GuiNode>,
     edges: Vec<(usize, usize)>, // Adjacency list (from_id, to_id), representing from < to
-    
+
     // UI State
     node_counter: usize,        // To assign unique IDs
     new_node_name: String,      // Input buffer for new node dialog
@@ -29,21 +31,21 @@ pub struct LatticeApp {
     show_multi_add_dialog: bool,// Toggle for the multi add dialog
     edge_start_node: Option<usize>, // Stores the ID of the first node clicked when creating an edge
     msg_log: String,            // Displays results (Count, Existence)
-    
+
+    // Viewport State (Pan & Zoom)
+    view_offset: egui::Vec2,
+    view_scale: f32,
+
     // Algorithm Settings
     cyclic: bool,               // Toggle for cyclic vs linear strips
-    
+
     // Visualization State
-    // If Some, we are in "Show" mode and display this specific strip.
-    // The strip is a list of layers, where each layer is a list of face indices.
     active_strip: Option<Vec<Vec<u8>>>,
-    // Stores the edges specifically returned by edges_strip for the active view
     active_strip_edges: Option<Vec<(usize, usize)>>,
 }
 
 impl LatticeApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // Initialize with a clean state
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
@@ -53,6 +55,8 @@ impl LatticeApp {
             show_multi_add_dialog: false,
             edge_start_node: None,
             msg_log: String::from("Welcome. Create vertices and edges."),
+            view_offset: egui::Vec2::ZERO,
+            view_scale: 1.0,
             cyclic: false,
             active_strip: None,
             active_strip_edges: None,
@@ -61,18 +65,35 @@ impl LatticeApp {
 
     // --- Helper Functions ---
 
-    /// Converts the current GUI graph state into your `Lattice` struct.
-    /// This allows us to feed the visual graph into your existing algorithms.
+    fn reset(&mut self) {
+        self.nodes.clear();
+        self.edges.clear();
+        self.node_counter = 0;
+        self.new_node_name.clear();
+        self.show_new_node_dialog = false;
+        self.show_multi_add_dialog = false;
+        self.edge_start_node = None;
+        self.msg_log = String::from("System Reset.");
+        self.active_strip = None;
+        self.active_strip_edges = None;
+        self.view_offset = egui::Vec2::ZERO;
+        self.view_scale = 1.0;
+    }
+
+    // Transform World Coordinate -> Screen Coordinate
+    fn to_screen(&self, world_pos: egui::Pos2) -> egui::Pos2 {
+        world_pos * self.view_scale + self.view_offset
+    }
+
+    // Transform Screen Coordinate -> World Coordinate
+    fn to_world(&self, screen_pos: egui::Pos2) -> egui::Pos2 {
+        (screen_pos - self.view_offset) / self.view_scale
+    }
+
     fn to_lattice(&self) -> Lattice {
         let mut faces: Vec<Face> = Vec::new();
-        
-        // We need to determine the dimension (level) of each face.
-        // In a lattice, this is usually the length of the longest chain to the bottom.
         let dims = self.compute_dimensions();
 
-        // Create Face objects
-        // We map GUI node IDs to Face indices based on the order of `self.nodes`.
-        // A map is created to look up the array index for a given Node ID.
         let id_to_index: HashMap<usize, usize> = self.nodes.iter()
             .enumerate()
             .map(|(i, node)| (node.id, i))
@@ -84,7 +105,6 @@ impl LatticeApp {
             let mut u_count = 0;
             let mut d_count = 0;
 
-            // Populate upset (edges pointing AWAY from this node: node < other)
             for (from, to) in &self.edges {
                 if *from == node.id {
                     if let Some(&to_idx) = id_to_index.get(to) {
@@ -94,7 +114,6 @@ impl LatticeApp {
                         }
                     }
                 }
-                // Populate downset (edges pointing TOWARDS this node: other < node)
                 if *to == node.id {
                     if let Some(&from_idx) = id_to_index.get(from) {
                         if d_count < 50 {
@@ -107,13 +126,12 @@ impl LatticeApp {
 
             faces.push(Face {
                 label: node.label.clone(),
-                dim: *dims.get(&node.id).unwrap_or(&0), 
+                dim: *dims.get(&node.id).unwrap_or(&0),
                 upset,
                 downset,
             });
         }
 
-        // Generate Levels (buckets of faces by dimension)
         let max_dim = faces.iter().map(|f| f.dim).max().unwrap_or(0);
         let mut levels = [[255u8; 50]; 30];
         let mut count_per_dim = [0u8; 30];
@@ -126,26 +144,22 @@ impl LatticeApp {
             }
         }
 
-        // Generate Bridges
-        // We replicate the bridge logic here to avoid dependency issues if `bridge()` isn't pub.
-        // A bridge between face i and j exists if there is a face k in downset(i) AND downset(j).
-        let mut bridges = [255u8; 100*100]; 
+        let mut bridges = [255u8; 100*100];
         for i in 0..faces.len() {
             for j in 0..faces.len() {
                 if i >= j { continue };
-                
+
                 let mut bridge_idx = None;
                 for (k, face) in faces.iter().enumerate() {
                     let i_u8 = i as u8;
                     let j_u8 = j as u8;
-                    
-                    // Check if k is in downset of i AND downset of j
+
                     let covers_i = face.downset.iter().take_while(|&&x| x != 255).any(|&x| x == i_u8);
                     let covers_j = face.downset.iter().take_while(|&&x| x != 255).any(|&x| x == j_u8);
 
                     if covers_i && covers_j {
                         bridge_idx = Some(k as u8);
-                        break; 
+                        break;
                     }
                 }
 
@@ -166,24 +180,19 @@ impl LatticeApp {
         }
     }
 
-    /// Computes the 'dimension' (vertical level) of each node using Longest Path in DAG.
     fn compute_dimensions(&self) -> HashMap<usize, u8> {
         let mut dims: HashMap<usize, u8> = HashMap::new();
-        
-        // Initialize all nodes to 0
+
         for node in &self.nodes {
             dims.insert(node.id, 0);
         }
 
-        // Relax edges repeatedly (Bellman-Ford style). 
-        // Max N iterations where N is node count ensures we find longest paths.
         for _ in 0..self.nodes.len() {
             let mut changed = false;
             for (from, to) in &self.edges {
                 let d_from = *dims.get(from).unwrap_or(&0);
                 let d_to = *dims.get(to).unwrap_or(&0);
-                
-                // If source level >= target level, push target up
+
                 if d_from >= d_to {
                     dims.insert(*to, d_from + 1);
                     changed = true;
@@ -191,60 +200,49 @@ impl LatticeApp {
             }
             if !changed { break; }
         }
-        
-        // Clamp to avoid array overflow in Lattice struct (max 30)
+
         for val in dims.values_mut() {
             if *val > 29 { *val = 29; }
         }
-        
+
         dims
     }
 
-    /// Re-arranges nodes on the canvas according to the calculated Rhombic Strip.
-    /// Mimics the logic in `show_strip` (polar for cyclic, layered for linear).
     fn apply_strip_layout(&mut self, strip: &Vec<Vec<u8>>) {
         let center = egui::pos2(500.0, 400.0);
-        
+
         for (layer_idx, layer) in strip.iter().enumerate() {
             let count = layer.len() as f32;
-            
-            // Determine Radius / Spacing
             let radius = if self.cyclic {
-                 if layer_idx == 0 { 
-                     if count <= 1.0 { 0.0 } else { (count * 1.2 / (2.0 * PI)).max(1.0) * 50.0 } 
+                 if layer_idx == 0 {
+                     if count <= 1.0 { 0.0 } else { (count * 1.2 / (2.0 * PI)).max(1.0) * 50.0 }
                  } else {
-                     100.0 + (layer_idx as f32 * 60.0) 
+                     100.0 + (layer_idx as f32 * 60.0)
                  }
             } else {
-                 0.0 
+                 0.0
             };
 
             for (i, &face_idx) in layer.iter().enumerate() {
-                // Map the lattice face index back to our GuiNode ID.
-                // Since to_lattice preserves order: face_idx == index in self.nodes
                 if face_idx as usize >= self.nodes.len() { continue; }
-                
+
                 let node_id = self.nodes[face_idx as usize].id;
                 let new_pos;
 
                 if self.cyclic {
-                    // Cyclic: Polar Coordinates
                     let angle = 2.0 * PI * (i as f32) / count;
                     let x = center.x + radius * angle.cos();
                     let y = center.y + radius * angle.sin();
                     new_pos = egui::pos2(x, y);
                 } else {
-                    // Linear: Cartesian
-                    // x based on index, y based on layer
                     let x_spacing = 80.0;
                     let y_spacing = 100.0;
-                    
+
                     let x = center.x + ((i as f32) - (count - 1.0)/2.0) * x_spacing;
-                    let y = 600.0 - (layer_idx as f32 * y_spacing); 
+                    let y = 600.0 - (layer_idx as f32 * y_spacing);
                     new_pos = egui::pos2(x, y);
                 }
 
-                // Update node position
                 if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
                     node.pos = new_pos;
                 }
@@ -255,36 +253,195 @@ impl LatticeApp {
 
 impl eframe::App for LatticeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        
+
         // --- LEFT SIDEBAR (Controls) ---
         egui::SidePanel::left("controls").show(ctx, |ui| {
             ui.heading("Lattice Builder");
             ui.separator();
 
-            // 1. New Vertex Creation (Single)
-            if ui.button("New Vertex").clicked() {
-                self.show_new_node_dialog = true;
-                self.show_multi_add_dialog = false;
-                self.new_node_name.clear();
-            }
-            
-            // 1b. Multi Add Mode
-            if ui.button("Multi Add").clicked() {
+            // 1. Add Vertex Button
+            if ui.button("Add").clicked() {
                 self.show_multi_add_dialog = true;
                 self.show_new_node_dialog = false;
                 self.new_node_name.clear();
             }
 
+            // 2. Infer Button
+            if ui.button("Infer").clicked() {
+                let mut new_edges_count = 0;
+                let mut new_relations = Vec::new();
+
+                for i in 0..self.nodes.len() {
+                    for j in 0..self.nodes.len() {
+                        if i == j { continue; }
+
+                        let label_a = &self.nodes[i].label;
+                        let label_b = &self.nodes[j].label;
+
+                        let is_cover = if label_a.len() == label_b.len() {
+                            let is_binary_a = label_a.chars().all(|c| c == '0' || c == '1');
+                            let is_binary_b = label_b.chars().all(|c| c == '0' || c == '1');
+
+                            if is_binary_a && is_binary_b {
+                                let mut diff_count = 0;
+                                let mut valid_pattern = true;
+
+                                for (ca, cb) in label_a.chars().zip(label_b.chars()) {
+                                    if ca != cb {
+                                        diff_count += 1;
+                                        if ca == '1' && cb == '0' {
+                                            valid_pattern = false;
+                                        }
+                                    }
+                                }
+                                diff_count == 1 && valid_pattern
+                            } else {
+                                false
+                            }
+                        } else if label_a.len() == label_b.len() - 1 {
+                            let mut b_chars: Vec<char> = label_b.chars().collect();
+                            let mut all_present = true;
+
+                            for char_a in label_a.chars() {
+                                if let Some(pos) = b_chars.iter().position(|&x| x == char_a) {
+                                    b_chars.remove(pos);
+                                } else {
+                                    all_present = false;
+                                    break;
+                                }
+                            }
+                            all_present
+                        } else {
+                            false
+                        };
+
+                        if is_cover {
+                            new_relations.push((self.nodes[i].id, self.nodes[j].id));
+                        }
+                    }
+                }
+
+                for (from_id, to_id) in new_relations {
+                    if !self.edges.contains(&(from_id, to_id)) {
+                        self.edges.push((from_id, to_id));
+                        new_edges_count += 1;
+                    }
+                }
+
+                self.msg_log = format!("Inferred {} new relations.", new_edges_count);
+            }
+
+            ui.separator();
+
+            // 3. To Distributive Button
+            if ui.button("To Distributed").clicked() {
+                let lattice = self.to_lattice();
+                let num_faces = lattice.faces.len();
+
+                // Safety guard for computational complexity
+                if num_faces > 16 {
+                    self.msg_log = format!("Lattice too large ({}) for interactive distribution.", num_faces);
+                } else {
+                    let mut ideals: Vec<(u64, Vec<String>)> = Vec::new();
+
+                    // Generate all ideals
+                    let max_mask = 1u64 << num_faces;
+                    for mask in 0..max_mask {
+                        let mut is_ideal = true;
+                        let mut current_subset_labels = Vec::new();
+
+                        for i in 0..num_faces {
+                            if (mask >> i) & 1 == 1 {
+                                current_subset_labels.push(lattice.faces[i].label.clone());
+                                let downset = &lattice.faces[i].downset;
+                                for &d in downset.iter() {
+                                    if d == 255 { break; }
+                                    if (mask >> d) & 1 == 0 {
+                                        is_ideal = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !is_ideal { break; }
+                        }
+
+                        if is_ideal {
+                            current_subset_labels.sort();
+                            ideals.push((mask, current_subset_labels));
+                        }
+                    }
+
+                    // Reset and populate
+                    self.reset();
+                    self.msg_log = format!("Generated Distributive Lattice J(L) with {} elements.", ideals.len());
+
+                    let mut size_groups: HashMap<u32, Vec<usize>> = HashMap::new();
+
+                    for (idx, (mask, labels)) in ideals.iter().enumerate() {
+                        let size = mask.count_ones();
+                        size_groups.entry(size).or_default().push(idx);
+
+                        let label_str = if labels.is_empty() {
+                            "?".to_string()
+                        } else {
+                            format!("{{{}}}", labels.join(","))
+                        };
+
+                        self.nodes.push(GuiNode {
+                            id: idx,
+                            label: label_str,
+                            pos: egui::Pos2::ZERO,
+                            dragged: false,
+                        });
+                        self.node_counter += 1;
+                    }
+
+                    // Layout
+                    let center_x = 500.0;
+                    let start_y = 650.0;
+                    let layer_height = 80.0;
+
+                    for (size, indices) in &size_groups {
+                        let count = indices.len() as f32;
+                        let width_spacing = 90.0;
+                        let row_width = (count - 1.0) * width_spacing;
+                        let y = start_y - (*size as f32 * layer_height);
+
+                        for (i, &node_idx) in indices.iter().enumerate() {
+                            let x = center_x - (row_width / 2.0) + (i as f32 * width_spacing);
+                            self.nodes[node_idx].pos = egui::pos2(x, y);
+                        }
+                    }
+
+                    // Edges
+                    for i in 0..ideals.len() {
+                        let (mask_a, _) = ideals[i];
+                        let size_a = mask_a.count_ones();
+
+                        for j in 0..ideals.len() {
+                            if i == j { continue; }
+                            let (mask_b, _) = ideals[j];
+                            let size_b = mask_b.count_ones();
+
+                            if size_b == size_a + 1 {
+                                if (mask_a & mask_b) == mask_a {
+                                    self.edges.push((i, j));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             ui.separator();
             ui.checkbox(&mut self.cyclic, "Cyclic Mode");
-            
+
             ui.separator();
             ui.label("Algorithms:");
 
-            // Convert GUI graph to Lattice struct
             let lattice = self.to_lattice();
 
-            // 2. Existence Check
+            // 4. Existence Check
             if ui.button("Existence").clicked() {
                 let mut found = false;
                 for ham in lattice.ham_paths(self.cyclic) {
@@ -297,15 +454,14 @@ impl eframe::App for LatticeApp {
                 if !found {
                     self.msg_log = "Result: No rhombic strip found.".to_string();
                 }
-                self.active_strip = None; // Reset view
+                self.active_strip = None;
                 self.active_strip_edges = None;
             }
 
-            // 3. Count Strips
+            // 5. Count Strips
             if ui.button("Count").clicked() {
                 let mut count = 0;
                 for ham in lattice.ham_paths(self.cyclic) {
-                    // Use lazy dfs to find all strips for this path
                     let new_strips = rhombic_strips_dfs_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic);
                     count += new_strips.len();
                 }
@@ -314,11 +470,10 @@ impl eframe::App for LatticeApp {
                 self.active_strip_edges = None;
             }
 
-            // 4. Show Strip
+            // 6. Show Strip
             if ui.button("Show").clicked() {
                 let mut found_strip = None;
-                
-                // Find first valid strip
+
                 for ham in lattice.ham_paths(self.cyclic) {
                     let strips = rhombic_strips_dfs_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic);
                     if !strips.is_empty() {
@@ -330,16 +485,13 @@ impl eframe::App for LatticeApp {
                 if let Some(strip) = found_strip {
                     self.msg_log = "Displaying first found strip.".to_string();
                     self.apply_strip_layout(&strip);
-                    
-                    // Convert the strip to usize for edges_strip call
+
                     let strip_usize: Vec<Vec<usize>> = strip.iter()
                         .map(|layer| layer.iter().map(|&x| x as usize).collect())
                         .collect();
-                    
-                    // Call the requested function to get exact edges
+
                     let edge_indices = edges_strip(&strip_usize, &lattice, self.cyclic);
-                    
-                    // Convert indices back to GUI node IDs for the renderer
+
                     let mapped_edges: Vec<(usize, usize)> = edge_indices.into_iter()
                         .filter_map(|(u_idx, v_idx)| {
                             if u_idx < self.nodes.len() && v_idx < self.nodes.len() {
@@ -349,7 +501,7 @@ impl eframe::App for LatticeApp {
                             }
                         })
                         .collect();
-                        
+
                     self.active_strip_edges = Some(mapped_edges);
                     self.active_strip = Some(strip);
                 } else {
@@ -366,58 +518,106 @@ impl eframe::App for LatticeApp {
             }
 
             ui.separator();
+
+            // 7. Export TeX
+            if ui.button("Export TeX").clicked() {
+                let visible_node_ids: Vec<usize> = if let Some(strip) = &self.active_strip {
+                    strip.iter().flatten().map(|&x| {
+                          if (x as usize) < self.nodes.len() { self.nodes[x as usize].id } else { usize::MAX }
+                    }).collect()
+                } else {
+                    self.nodes.iter().map(|n| n.id).collect()
+                };
+
+                let edges_to_export = if let Some(ref specific_edges) = self.active_strip_edges {
+                    specific_edges
+                } else {
+                    &self.edges
+                };
+
+                let mut tex = String::new();
+                tex.push_str("\\documentclass[tikz, border=1cm]{standalone}\n");
+                tex.push_str("\\begin{document}\n");
+                tex.push_str("\\begin{tikzpicture}[y=-1cm]\n\n");
+
+                let scale = 0.02;
+
+                tex.push_str("% Coordinates\n");
+                for node in &self.nodes {
+                    if !visible_node_ids.contains(&node.id) { continue; }
+                    let safe_label = node.label.replace("{", "").replace("}", "").replace(",", "_").replace("?", "empty");
+                    // Export using World Position (preserves relative layout regardless of zoom)
+                    tex.push_str(&format!("\\coordinate ({}) at ({:.2}, {:.2});\n",
+                        safe_label,
+                        node.pos.x * scale,
+                        node.pos.y * scale
+                    ));
+                }
+                tex.push_str("\n");
+
+                tex.push_str("% Edges\n");
+                tex.push_str("\\foreach \\a/\\b in {");
+
+                let mut edge_strings = Vec::new();
+                for (from, to) in edges_to_export {
+                    if !visible_node_ids.contains(from) || !visible_node_ids.contains(to) { continue; }
+
+                    let l1 = self.nodes.iter().find(|n| n.id == *from).unwrap().label.replace("{", "").replace("}", "").replace(",", "_").replace("?", "empty");
+                    let l2 = self.nodes.iter().find(|n| n.id == *to).unwrap().label.replace("{", "").replace("}", "").replace(",", "_").replace("?", "empty");
+                    edge_strings.push(format!("{}/{}", l1, l2));
+                }
+                tex.push_str(&edge_strings.join(", "));
+
+                tex.push_str("} {\n    \\draw \\a -- \\b;\n}\n\n");
+
+                tex.push_str("% Nodes\n");
+                tex.push_str("\\foreach \\v/\\l in {");
+
+                let mut label_strings = Vec::new();
+                for node in &self.nodes {
+                    if !visible_node_ids.contains(&node.id) { continue; }
+                    let safe_label = node.label.replace("{", "").replace("}", "").replace(",", "_").replace("?", "empty");
+                    label_strings.push(format!("{}/{{{}}}", safe_label, node.label));
+                }
+                tex.push_str(&label_strings.join(", "));
+
+                tex.push_str("} {\n    \\node[draw, circle, fill=white, inner sep=2pt] at (\\v) {\\footnotesize \\l};\n}\n");
+
+                tex.push_str("\\end{tikzpicture}\n");
+                tex.push_str("\\end{document}\n");
+
+                match fs::write("lattice_output.tex", tex) {
+                    Ok(_) => self.msg_log = "Exported to lattice_output.tex".to_string(),
+                    Err(e) => self.msg_log = format!("Export failed: {}", e),
+                }
+            }
+
+            // 8. Restart Button
+            if ui.button("Restart").clicked() {
+                self.reset();
+            }
+
+            ui.separator();
             ui.heading("Log:");
             ui.label(&self.msg_log);
-            
+
             ui.add_space(20.0);
-            ui.small("Instructions:\n- Drag nodes to move\n- Click Node A then Node B to create cover relation A < B\n- 'Show' locks editing and hides non-strip edges.");
+            ui.small("Controls:\n- Drag background to Pan\n- Mouse Wheel to Zoom");
         });
 
         // --- FLOATING WINDOWS ---
-        
-        // 1. Single Add Dialog
-        if self.show_new_node_dialog {
-            egui::Window::new("Enter Label")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -100.0))
-                .show(ctx, |ui| {
-                    ui.text_edit_singleline(&mut self.new_node_name);
-                    ui.horizontal(|ui| {
-                        if ui.button("Create").clicked() {
-                            let id = self.node_counter;
-                            self.nodes.push(GuiNode {
-                                id,
-                                label: if self.new_node_name.is_empty() { format!("{}", id) } else { self.new_node_name.clone() },
-                                pos: egui::pos2(400.0 + (id as f32 * 20.0), 200.0), // Slight offset
-                                dragged: false,
-                            });
-                            self.node_counter += 1;
-                            self.show_new_node_dialog = false;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.show_new_node_dialog = false;
-                        }
-                    });
-                });
-        }
-        
-        // 2. Multi Add Dialog (Corrected)
         if self.show_multi_add_dialog {
-            egui::Window::new("Multi Add Mode")
+            egui::Window::new("Add Nodes")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -100.0))
                 .show(ctx, |ui| {
                     ui.label("Type label and press Enter to add.");
                     let response = ui.text_edit_singleline(&mut self.new_node_name);
-                    
-                    // Request focus immediately to ensure user can keep typing
                     response.request_focus();
-                    
+
                     let mut add_pressed = false;
 
-                    // Add Logic
                     if ui.input(|i| i.key_pressed(egui::Key::Enter)) && response.has_focus() {
                         add_pressed = true;
                     }
@@ -436,11 +636,12 @@ impl eframe::App for LatticeApp {
                         self.nodes.push(GuiNode {
                             id,
                             label: if self.new_node_name.is_empty() { format!("{}", id) } else { self.new_node_name.clone() },
+                            // Place new nodes relative to current center view
                             pos: egui::pos2(400.0 + (id as f32 * 20.0), 200.0),
                             dragged: false,
                         });
                         self.node_counter += 1;
-                        self.new_node_name.clear(); // Clear text box for next entry
+                        self.new_node_name.clear();
                         self.msg_log = format!("Added node {}", id);
                     }
                 });
@@ -452,25 +653,40 @@ impl eframe::App for LatticeApp {
             .frame(egui::Frame::central_panel(&ctx.style()).fill(egui::Color32::WHITE))
             .show(ctx, |ui| {
             let (response, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
-            
-            // Determine which nodes to draw
+
+            // --- INPUT HANDLING: PAN & ZOOM ---
+
+            // 1. Zooming (Mouse Wheel)
+            if response.hovered() {
+                 let scroll_delta = ui.input(|i| i.raw_scroll_delta);
+                 if scroll_delta.y != 0.0 {
+                     let zoom_factor = if scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
+                     let new_zoom = self.view_scale * zoom_factor;
+
+                     // Zoom towards mouse pointer
+                     if let Some(mouse_pos) = response.hover_pos() {
+                         let world_mouse = self.to_world(mouse_pos);
+                         // new_offset = mouse - world * new_zoom
+                         self.view_offset = mouse_pos.to_vec2() - (world_mouse.to_vec2() * new_zoom);
+                     }
+                     self.view_scale = new_zoom;
+                 }
+            }
+
+            // 2. Determine if nodes are being dragged to block Pan
+            let mut any_node_dragged = false;
+
+            // Determine visible nodes and edges
             let visible_node_ids: Vec<usize> = if let Some(strip) = &self.active_strip {
                 strip.iter().flatten().map(|&x| {
-                     // Map index back to ID safely
-                     if (x as usize) < self.nodes.len() {
-                         self.nodes[x as usize].id
-                     } else {
-                         usize::MAX 
-                     }
+                      if (x as usize) < self.nodes.len() { self.nodes[x as usize].id } else { usize::MAX }
                 }).collect()
             } else {
                 self.nodes.iter().map(|n| n.id).collect()
             };
 
-            // Draw Edges
+            // Draw Edges (transformed)
             let stroke_default = egui::Stroke::new(2.0, egui::Color32::BLACK);
-            
-            // Choose source of edges based on mode
             let edges_to_draw = if let Some(ref specific_edges) = self.active_strip_edges {
                 specific_edges
             } else {
@@ -478,69 +694,64 @@ impl eframe::App for LatticeApp {
             };
 
             for (from, to) in edges_to_draw {
-                // If node is not visible, don't draw edge
-                if !visible_node_ids.contains(from) || !visible_node_ids.contains(to) {
-                    continue; 
-                }
+                if !visible_node_ids.contains(from) || !visible_node_ids.contains(to) { continue; }
 
-                // Find positions
                 let p1_opt = self.nodes.iter().find(|n| n.id == *from).map(|n| n.pos);
                 let p2_opt = self.nodes.iter().find(|n| n.id == *to).map(|n| n.pos);
 
                 if let (Some(p1), Some(p2)) = (p1_opt, p2_opt) {
-                     painter.line_segment([p1, p2], stroke_default);
+                      painter.line_segment([self.to_screen(p1), self.to_screen(p2)], stroke_default);
                 }
             }
-            
-            // Draw creation preview line
+
+            // Creation Preview Line
             if let Some(start_id) = self.edge_start_node {
                 if let Some(start_node) = self.nodes.iter().find(|n| n.id == start_id) {
                     if let Some(pointer_pos) = response.hover_pos() {
                         painter.line_segment(
-                            [start_node.pos, pointer_pos], 
+                            [self.to_screen(start_node.pos), pointer_pos],
                             egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(255, 0, 0, 128))
                         );
                     }
                 }
             }
 
-            // Draw Nodes
+            // Draw Nodes & Handle Interactions
             for i in 0..self.nodes.len() {
                 let node_id = self.nodes[i].id;
-                
-                // Skip if hidden
                 if !visible_node_ids.contains(&node_id) { continue; }
 
-                let node_pos = self.nodes[i].pos;
+                let node_pos_world = self.nodes[i].pos;
+                let node_pos_screen = self.to_screen(node_pos_world);
                 let label = self.nodes[i].label.clone();
-                
-                // Interaction Area
+
+                // Interaction Area (in Screen Space)
                 let node_radius = 20.0;
-                let node_rect = egui::Rect::from_center_size(node_pos, egui::vec2(node_radius*2.0, node_radius*2.0));
+                let node_rect = egui::Rect::from_center_size(node_pos_screen, egui::vec2(node_radius*2.0, node_radius*2.0));
                 let node_response = ui.interact(node_rect, egui::Id::new(node_id), egui::Sense::click_and_drag());
 
-                // Dragging Logic
                 if node_response.dragged() {
-                    self.nodes[i].pos += node_response.drag_delta();
+                    // Update World Position: Delta screen / Scale
+                    self.nodes[i].pos += node_response.drag_delta() / self.view_scale;
                     self.nodes[i].dragged = true;
+                    any_node_dragged = true;
                 } else {
                     self.nodes[i].dragged = false;
                 }
 
-                // Click Logic (Edge Creation)
+                // Node Click Logic
                 if node_response.clicked() && self.active_strip.is_none() {
                     match self.edge_start_node {
                         None => {
                             self.edge_start_node = Some(node_id);
-                            self.msg_log = format!("Selected {}. Click target for cover relation...", label);
+                            self.msg_log = format!("Selected {}. Click target...", label);
                         }
                         Some(start_id) => {
                             if start_id != node_id {
-                                // Add Edge v1 -> v2 (v1 < v2)
                                 if !self.edges.contains(&(start_id, node_id)) && !self.edges.contains(&(node_id, start_id)) {
                                     self.edges.push((start_id, node_id));
-                                    self.msg_log = format!("Relation added: {} < {}", 
-                                        self.nodes.iter().find(|n| n.id == start_id).unwrap().label, 
+                                    self.msg_log = format!("Relation added: {} < {}",
+                                        self.nodes.iter().find(|n| n.id == start_id).unwrap().label,
                                         label);
                                 }
                             }
@@ -549,18 +760,23 @@ impl eframe::App for LatticeApp {
                     }
                 }
 
-                // Drawing the Node
                 let fill_color = if self.edge_start_node == Some(node_id) {
-                    egui::Color32::LIGHT_RED // Highlight selected source
+                    egui::Color32::LIGHT_RED
                 } else {
                     egui::Color32::WHITE
                 };
-                
-                painter.circle(node_pos, node_radius, fill_color, egui::Stroke::new(1.0, egui::Color32::BLACK));
-                painter.text(node_pos, egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(14.0), egui::Color32::BLACK);
+
+                painter.circle(node_pos_screen, node_radius, fill_color, egui::Stroke::new(1.0, egui::Color32::BLACK));
+                painter.text(node_pos_screen, egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(14.0), egui::Color32::BLACK);
             }
-            
-            // Right click to cancel edge creation
+
+            // 3. Panning (Background Drag)
+            // Only pan if we dragged the background AND we didn't drag any node
+            if response.dragged_by(egui::PointerButton::Primary) && !any_node_dragged {
+                self.view_offset += response.drag_delta();
+            }
+
+            // Right click cancel
             if response.clicked_by(egui::PointerButton::Secondary) {
                 self.edge_start_node = None;
                 self.msg_log = "Edge creation cancelled.".to_string();
@@ -569,14 +785,13 @@ impl eframe::App for LatticeApp {
     }
 }
 
-// Entry point function
 pub fn interactive() {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1024.0, 768.0]),
         ..Default::default()
     };
-    
+
     let _ = eframe::run_native(
         "Lattice Interactive Mode",
         options,
