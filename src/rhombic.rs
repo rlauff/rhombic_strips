@@ -231,7 +231,7 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: boo
     let bridges_upper = if cyclic { n } else { n - 1 };
 
     let bridges: Vec<_> = (0..bridges_upper)
-        .map(|x| l.bridges[last_layer[x] as usize*100 + last_layer[(x+1) % n] as usize])
+        .map(|x| l.bridges[last_layer[x] as usize][last_layer[(x+1) % n] as usize])
         .collect();
 
     if !layer_ok(&bridges, cyclic) { 

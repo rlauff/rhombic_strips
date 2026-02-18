@@ -1,8 +1,13 @@
 
 use eframe::egui;
+use eframe::glow::MAX;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::fs;
+
+use crate::MAX_FACES;
+use crate::MAX_UP_DOWN;
+use crate::MAX_LEVELS;
 
 // Imports as requested
 use crate::lattice::*;
@@ -100,8 +105,8 @@ impl LatticeApp {
             .collect();
 
         for node in &self.nodes {
-            let mut upset = [255u8; 50];
-            let mut downset = [255u8; 50];
+            let mut upset = [255u8; MAX_UP_DOWN];
+            let mut downset = [255u8; MAX_UP_DOWN];
             let mut u_count = 0;
             let mut d_count = 0;
 
@@ -133,18 +138,18 @@ impl LatticeApp {
         }
 
         let max_dim = faces.iter().map(|f| f.dim).max().unwrap_or(0);
-        let mut levels = [[255u8; 50]; 30];
-        let mut count_per_dim = [0u8; 30];
+        let mut levels = [[255u8; MAX_UP_DOWN]; MAX_LEVELS];
+        let mut count_per_dim = [0u8; MAX_LEVELS];
 
         for (i, face) in faces.iter().enumerate() {
             let d = face.dim as usize;
-            if d < 30 && (count_per_dim[d] as usize) < 50 {
+            if d < MAX_LEVELS && (count_per_dim[d] as usize) < MAX_UP_DOWN {
                 levels[d][count_per_dim[d] as usize] = i as u8;
                 count_per_dim[d] += 1;
             }
         }
 
-        let mut bridges = [255u8; 100*100];
+        let mut bridges = [[255u8; MAX_FACES]; MAX_FACES];
         for i in 0..faces.len() {
             for j in 0..faces.len() {
                 if i >= j { continue };
@@ -164,9 +169,9 @@ impl LatticeApp {
                 }
 
                 if let Some(b) = bridge_idx {
-                    if i * 100 + j < bridges.len() {
-                        bridges[i * 100 + j] = b;
-                        bridges[j * 100 + i] = b;
+                    if i < MAX_FACES && j < MAX_FACES {
+                        bridges[i][j] = b;
+                        bridges[j][i] = b;
                     }
                 }
             }

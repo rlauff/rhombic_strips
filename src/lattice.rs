@@ -1,5 +1,6 @@
-// functionality for reading in and dealing with the face lattice
-
+use crate::MAX_FACES;
+use crate::MAX_UP_DOWN;
+use crate::MAX_LEVELS;
 
 //faces are contained in the face lattice which acts as an arena. The upset etc are saved as a list of indices to the faces in this arena.
 //a face object alone hence makes no sense
@@ -11,15 +12,15 @@ use std::str;
 pub struct Face {
     pub label: String,
     pub dim: u8,
-    pub upset: [u8; 50],        // fixed size arrays for better caching. 255 indicates empty
-    pub downset: [u8; 50],
+    pub upset: [u8; MAX_UP_DOWN],        // fixed size arrays for better caching. 255 indicates empty
+    pub downset: [u8; MAX_UP_DOWN],
 }
 
 #[derive(Debug)]
 pub struct Lattice {
     pub faces: Vec<Face>,
-    pub levels: [[u8; 50]; 30], // fixed size arrays for better caching. 255 indicates empty
-    pub bridges: [u8; 100*100], // max number of faces is 100, so we can store the bridges in a 100x100 array. 255 indicates no bridge, otherwise the value is the index of the bridge face
+    pub levels: [[u8; MAX_UP_DOWN]; MAX_LEVELS], // fixed size arrays for better caching. 255 indicates empty
+    pub bridges: [[u8; MAX_FACES]; MAX_FACES], // max number of faces is 100, so we can store the bridges in a 100x100 array. 255 indicates no bridge, otherwise the value is the index of the bridge face
     pub dim: u8,
     // pub ham: Vec<Vec<u8>>, // to be exchanged for a impl iter that generates the hamilton paths on the fly, since storing them can be very memory intensive for large lattices
 }
@@ -71,7 +72,7 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         // upset
         // Remove the leading '{' and any surrounding whitespace
         let upset_clean = set_strings[0].trim_start_matches('{').trim();
-        let mut upset = [255u8; 50]; // Initialize with 255 (empty indicator)
+        let mut upset = [255u8; MAX_UP_DOWN]; // Initialize with 255 (empty indicator)
         let mut upset_count = 0;     // Counter to act as a stack pointer
 
         if !upset_clean.is_empty() {
@@ -82,11 +83,11 @@ pub fn lattice_from_file(file: &str) -> Lattice {
                 let val = trimmed.parse::<usize>().expect("something was not an integer");
                 
                 // Logic fix: "push" the value into the next available slot
-                if upset_count < 50 {
+                if upset_count < MAX_UP_DOWN {
                     upset[upset_count] = val as u8; 
                     upset_count += 1;
                 } else {
-                    panic!("Upset count exceeds maximum allowed size of 50");
+                    panic!("Upset count exceeds maximum allowed size of {}", MAX_UP_DOWN);
                 }
             }
         }
@@ -94,7 +95,7 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         // downset
         // Remove the trailing '}' and any surrounding whitespace
         let downset_clean = set_strings[1].trim_end_matches('}').trim();
-        let mut downset = [255u8; 50]; // Initialize with 255 (empty indicator)
+        let mut downset = [255u8; MAX_UP_DOWN]; // Initialize with 255 (empty indicator)
         let mut downset_count = 0;     // Counter to act as a stack pointer
 
         if !downset_clean.is_empty() {
@@ -105,11 +106,11 @@ pub fn lattice_from_file(file: &str) -> Lattice {
                 let val = trimmed.parse::<usize>().expect("something was not an integer");
 
                 // Logic fix: "push" the value into the next available slot
-                if downset_count < 50 {
+                if downset_count < MAX_UP_DOWN {
                     downset[downset_count] = val as u8;
                     downset_count += 1;
                 } else {
-                    panic!("Downset count exceeds maximum allowed size of 50");
+                    panic!("Downset count exceeds maximum allowed size of {}", MAX_UP_DOWN);
                 }
             }
         }
@@ -126,30 +127,30 @@ pub fn lattice_from_file(file: &str) -> Lattice {
 
     // make levels
     let max_dim = faces.iter().map(|x| x.dim).max().unwrap_or(0);
-    let mut levels = [[255u8; 50]; 30]; // Initialize with 255 (empty indicator)
-    let mut count_per_dim = [0u8; 30]; // To keep track of how many faces we have added to each dimension level
+    let mut levels = [[255u8; MAX_UP_DOWN]; MAX_LEVELS]; // Initialize with 255 (empty indicator)
+    let mut count_per_dim = [0u8; MAX_LEVELS]; // To keep track of how many faces we have added to each dimension level
     
     for (i, face) in faces.iter().enumerate() {
         let d = face.dim as usize;
         // Check bounds to prevent panics
-        if d < 30 && (count_per_dim[d] as usize) < 50 {
+        if d < MAX_LEVELS && (count_per_dim[d] as usize) < MAX_UP_DOWN {
              levels[d][count_per_dim[d] as usize] = i as u8; // Store the index directly
              count_per_dim[d] += 1;
         }
     }
 
     // generate and store bridges
-    let mut bridges = [255u8; 100*100]; // Initialize with 255 (no bridge indicator)
+    let mut bridges = [[255u8; MAX_FACES]; MAX_FACES]; // Initialize with 255 (no bridge indicator)
     for i in 0..faces.len() {
         for j in 0..faces.len() {
             if i >= j { continue };
             
             // Check if a bridge exists between face i and face j
             if let Some(b) = bridge(&faces, i as u8, j as u8) {
-                // Bounds check for the flattened array
-                if i * 100 + j < bridges.len() {
-                    bridges[i * 100 + j] = b;
-                    bridges[j * 100 + i] = b;
+                // Bounds check for the 2D array
+                if i < MAX_FACES && j < MAX_FACES {
+                    bridges[i][j] = b;
+                    bridges[j][i] = b;
                 }
             }
         }
@@ -182,7 +183,7 @@ impl Lattice {
 
         // build adjacency list for faster lookups during iteration
         // since max faces is 100, we can use a direct vector index
-        let mut adj: Vec<Vec<u8>> = vec![vec![]; 100]; 
+        let mut adj: Vec<Vec<u8>> = vec![vec![]; MAX_FACES]; 
         let num_nodes = nodes.len();
 
         // populate adjacency list using the precomputed bridges matrix
@@ -191,13 +192,11 @@ impl Lattice {
                 let u = nodes[i];
                 let v = nodes[j];
                 
-                // check bridges array (flattened 100x100)
                 // we check both directions u->v and v->u just to be safe
-                let idx1 = (u as usize) * 100 + (v as usize);
-                let idx2 = (v as usize) * 100 + (u as usize);
+                let id_u = (u as usize);
+                let id_v = (v as usize);
                 
-                let connected = (idx1 < self.bridges.len() && self.bridges[idx1] != 255) ||
-                                (idx2 < self.bridges.len() && self.bridges[idx2] != 255);
+                let connected = self.bridges[id_u][id_v] != 255;
 
                 if connected {
                     adj[u as usize].push(v);

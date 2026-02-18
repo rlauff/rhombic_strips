@@ -8,6 +8,10 @@ use crate::gui::*;
 mod plotting;
 use crate::plotting::*;
 
+pub const MAX_FACES: usize = 500; // maximum number of faces in the lattice, used for fixed-size arrays
+pub const MAX_UP_DOWN: usize = 100; // maximum number of faces in the upset/downset of a face, used for fixed-size arrays
+pub const MAX_LEVELS: usize = 100; // maximum number of levels in the lattice, used for fixed-size arrays
+
 
 fn main() {
     // read in source

@@ -19,7 +19,7 @@ pub fn edges_strip(layers: &Vec<Vec<usize>>, l: &Lattice, cyclic: bool) -> Vec<(
         }
         let n = layer.len();
         let bridges: Vec<_> = (0..n-1)
-        .map(|x| l.bridges[layer[x] as usize *100 + layer[x + 1] as usize])
+        .map(|x| l.bridges[layer[x] as usize][layer[x + 1] as usize])
         .collect();
         // the bridge at index i is above elements layer[i] and layer[i+1], so we add edges from both of them to the bridge
         for i in 0..(layer.len()-1) {
