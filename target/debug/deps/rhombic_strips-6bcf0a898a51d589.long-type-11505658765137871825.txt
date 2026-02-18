@@ -1,1 +1,0 @@
-std::iter::Filter<std::slice::Iter<'_, [usize; 2]>, {closure@src/lattice.rs:199:42: 199:45}>

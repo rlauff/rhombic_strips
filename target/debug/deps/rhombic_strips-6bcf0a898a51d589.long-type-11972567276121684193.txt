@@ -1,1 +1,0 @@
-std::iter::Filter<std::slice::Iter<'_, [usize; 2]>, {closure@src/main.rs:83:34: 83:37}>
