@@ -287,6 +287,21 @@ impl Iterator for HamiltonianIter {
             return None;
         }
 
+        if self.nodes.len() == 1 {
+            // Wir prüfen, ob der Pfad noch existiert (wurde in 'new' -> 'push_start_node' gesetzt)
+            if self.path.len() == 1 {
+                let res = self.path.clone();
+                
+                // Aufräumen, damit der nächste Aufruf None zurückgibt
+                self.path.clear();
+                self.stack.clear();
+                self.finished = true;
+                
+                return Some(res);
+            }
+            return None;
+        }
+
         // Iterative DFS loop
         loop {
             // if stack is empty, we are done with the current start_node

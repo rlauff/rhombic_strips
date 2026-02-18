@@ -2,7 +2,7 @@ use crate::lattice::*;
 use rayon::prelude::*;
 use std::iter::Iterator;
 
-fn layer_ok(layer: &Vec<u8>, cyclic: bool, l: &Lattice) -> bool {
+fn layer_ok(layer: &Vec<u8>, cyclic: bool) -> bool {
     if layer.is_empty() {
         return true;
     }
@@ -234,7 +234,7 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: boo
         .map(|x| l.bridges[last_layer[x] as usize*100 + last_layer[(x+1) % n] as usize])
         .collect();
 
-    if !layer_ok(&bridges, cyclic, l) { 
+    if !layer_ok(&bridges, cyclic) { 
         return itertools::Either::Left(std::iter::empty()); 
     };   
 
@@ -259,7 +259,7 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: boo
 
     let iter = gap_assignments_lazy(gaps, faces_left)
         .map(move |x| combine_to_layer(&bridges, &x))
-        .filter(move |x| layer_ok(x, cyclic, l))
+        .filter(move |x| layer_ok(x, cyclic))
         .map(|x| duplicates_removed(x));
 
     itertools::Either::Right(iter)
