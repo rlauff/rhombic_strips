@@ -39,7 +39,6 @@ fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, split:
 
     let mut number_found = 0;
     for ham in l.ham_paths(cyclic) {
-        println!("found one");
         if !count && !split && !show && !show_cyclic {
             if rhombic_strip_exists(&ham.clone(), 0, &l, l.dim.clone() as usize, cyclic) {
                 println!("A rhombic strip was found");

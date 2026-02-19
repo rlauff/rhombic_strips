@@ -228,7 +228,12 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: boo
 
     let dim = l.faces[last_layer[0] as usize].dim;
     let n = last_layer.len();
-    let bridges_upper = if cyclic { n } else { n - 1 };
+    let bridges_upper = match (cyclic, n) {
+        (true, 1) => 0, // No bridges needed for a single face in cyclic case
+        (true, 2) => 1, // only one bridge needed since it connects back to itself
+        (true, _) => n, // Cyclic case has as many bridges as faces
+        (false, _) => n - 1, // Linear case has one less bridge than faces
+    };
 
     let bridges: Vec<_> = (0..bridges_upper)
         .map(|x| l.bridges[last_layer[x] as usize][last_layer[(x+1) % n] as usize])
