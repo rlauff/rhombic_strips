@@ -1,15 +1,15 @@
-
 use eframe::egui;
 use eframe::glow::MAX;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::fs;
 
+// Assumed constants from your crate
 use crate::MAX_FACES;
 use crate::MAX_UP_DOWN;
 use crate::MAX_LEVELS;
 
-// Imports as requested
+// Assumed Imports from your crate
 use crate::lattice::*;
 use crate::rhombic::*;
 use crate::plotting::*;
@@ -36,6 +36,9 @@ pub struct LatticeApp {
     show_multi_add_dialog: bool,// Toggle for the multi add dialog
     edge_start_node: Option<usize>, // Stores the ID of the first node clicked when creating an edge
     msg_log: String,            // Displays results (Count, Existence)
+    
+    // Grid Generation State
+    grid_gen_input: String,
 
     // Viewport State (Pan & Zoom)
     view_offset: egui::Vec2,
@@ -60,6 +63,7 @@ impl LatticeApp {
             show_multi_add_dialog: false,
             edge_start_node: None,
             msg_log: String::from("Welcome. Create vertices and edges."),
+            grid_gen_input: String::new(), // Initializing new field
             view_offset: egui::Vec2::ZERO,
             view_scale: 1.0,
             cyclic: false,
@@ -83,6 +87,7 @@ impl LatticeApp {
         self.active_strip_edges = None;
         self.view_offset = egui::Vec2::ZERO;
         self.view_scale = 1.0;
+        // Keep grid_gen_input as is for convenience
     }
 
     // Transform World Coordinate -> Screen Coordinate
@@ -265,14 +270,133 @@ impl eframe::App for LatticeApp {
             ui.separator();
 
             // 1. Add Vertex Button
-            if ui.button("Add").clicked() {
+            if ui.button("Add Nodes").clicked() {
                 self.show_multi_add_dialog = true;
                 self.show_new_node_dialog = false;
                 self.new_node_name.clear();
             }
 
-            // 2. Infer Button
-            if ui.button("Infer").clicked() {
+            ui.separator();
+
+            // 2. Grid Generator Logic
+            ui.label("Grid Generator:");
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.grid_gen_input).on_hover_text("e.g. 211");
+                if ui.button("Create").clicked() {
+                    // 1. Parse Input "211" -> [2, 1, 1]
+                    let dims: Vec<u32> = self.grid_gen_input.chars()
+                        .filter_map(|c| c.to_digit(10))
+                        .collect();
+                    
+                    if !dims.is_empty() {
+                        self.reset();
+                        self.msg_log = format!("Generating grid for dims: {:?}", dims);
+
+                        // 2. Generate Nodes
+                        // Recursive closure to generate strings
+                        let mut results = Vec::new();
+                        fn generate_recursive(
+                            idx: usize, 
+                            current_str: String, 
+                            current_sum: u32,
+                            dims: &[u32], 
+                            results: &mut Vec<(String, u32)> // Label, Sum
+                        ) {
+                            if idx == dims.len() {
+                                results.push((current_str, current_sum));
+                                return;
+                            }
+                            for i in 0..=dims[idx] {
+                                let mut next_str = current_str.clone();
+                                next_str.push_str(&i.to_string());
+                                generate_recursive(idx + 1, next_str, current_sum + i, dims, results);
+                            }
+                        }
+
+                        generate_recursive(0, String::new(), 0, &dims, &mut results);
+
+                        // Group by rank (sum) for layout
+                        let mut rank_groups: HashMap<u32, Vec<usize>> = HashMap::new();
+
+                        for (i, (label, sum)) in results.iter().enumerate() {
+                            self.nodes.push(GuiNode {
+                                id: i,
+                                label: label.clone(),
+                                pos: egui::Pos2::ZERO, // calculated below
+                                dragged: false,
+                            });
+                            self.node_counter += 1;
+                            rank_groups.entry(*sum).or_default().push(i);
+                        }
+
+                        // 3. Layout (Center X, Y based on rank)
+                        let center_x = 500.0;
+                        let start_y = 700.0;
+                        let y_step = 80.0;
+                        let x_step = 80.0;
+
+                        for (rank, indices) in rank_groups {
+                            let row_count = indices.len() as f32;
+                            let row_width = (row_count - 1.0) * x_step;
+                            let y = start_y - (rank as f32 * y_step);
+
+                            for (k, &node_idx) in indices.iter().enumerate() {
+                                let x = center_x - (row_width / 2.0) + (k as f32 * x_step);
+                                self.nodes[node_idx].pos = egui::pos2(x, y);
+                            }
+                        }
+
+                        // 4. Generate Edges for Grid
+                        // A covers B if B = A + e_i
+                        for i in 0..self.nodes.len() {
+                            for j in 0..self.nodes.len() {
+                                if i == j { continue; }
+                                
+                                let s1 = &self.nodes[i].label; // Lower (potential)
+                                let s2 = &self.nodes[j].label; // Upper (potential)
+
+                                // Check grid covering relation specifically
+                                let mut diff_idx = None;
+                                let mut is_cover = true;
+
+                                let chars1: Vec<char> = s1.chars().collect();
+                                let chars2: Vec<char> = s2.chars().collect();
+
+                                if chars1.len() != chars2.len() { continue; }
+
+                                for k in 0..chars1.len() {
+                                    if chars1[k] != chars2[k] {
+                                        if diff_idx.is_none() {
+                                            // Must be exactly one greater
+                                            let d1 = chars1[k].to_digit(10).unwrap() as i32;
+                                            let d2 = chars2[k].to_digit(10).unwrap() as i32;
+                                            if d2 == d1 + 1 {
+                                                diff_idx = Some(k);
+                                            } else {
+                                                is_cover = false;
+                                                break;
+                                            }
+                                        } else {
+                                            // More than one difference
+                                            is_cover = false;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if is_cover && diff_idx.is_some() {
+                                    self.edges.push((self.nodes[i].id, self.nodes[j].id));
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            ui.separator();
+
+            // 3. Infer Button (UPDATED)
+            if ui.button("Infer Edges").clicked() {
                 let mut new_edges_count = 0;
                 let mut new_relations = Vec::new();
 
@@ -280,42 +404,37 @@ impl eframe::App for LatticeApp {
                     for j in 0..self.nodes.len() {
                         if i == j { continue; }
 
-                        let label_a = &self.nodes[i].label;
-                        let label_b = &self.nodes[j].label;
+                        let label_a = &self.nodes[i].label; // Potential lower
+                        let label_b = &self.nodes[j].label; // Potential upper
 
+                        // UPDATED LOGIC:
+                        // 1. Same Length
+                        // 2. All Digits
+                        // 3. Sum(B) = Sum(A) + 1
+                        // 4. Differ in exactly one position
+                        
                         let is_cover = if label_a.len() == label_b.len() {
-                            let is_binary_a = label_a.chars().all(|c| c == '0' || c == '1');
-                            let is_binary_b = label_b.chars().all(|c| c == '0' || c == '1');
+                            // Check if only digits
+                            let a_is_digit = label_a.chars().all(|c| c.is_ascii_digit());
+                            let b_is_digit = label_b.chars().all(|c| c.is_ascii_digit());
 
-                            if is_binary_a && is_binary_b {
-                                let mut diff_count = 0;
-                                let mut valid_pattern = true;
+                            if a_is_digit && b_is_digit {
+                                let sum_a: i32 = label_a.chars().map(|c| c.to_digit(10).unwrap() as i32).sum();
+                                let sum_b: i32 = label_b.chars().map(|c| c.to_digit(10).unwrap() as i32).sum();
 
-                                for (ca, cb) in label_a.chars().zip(label_b.chars()) {
-                                    if ca != cb {
-                                        diff_count += 1;
-                                        if ca == '1' && cb == '0' {
-                                            valid_pattern = false;
-                                        }
-                                    }
+                                if sum_b == sum_a + 1 {
+                                    // Sum condition met, now check position difference count
+                                    let diff_count = label_a.chars().zip(label_b.chars())
+                                        .filter(|(ca, cb)| ca != cb)
+                                        .count();
+                                    
+                                    diff_count == 1
+                                } else {
+                                    false
                                 }
-                                diff_count == 1 && valid_pattern
                             } else {
                                 false
                             }
-                        } else if label_a.len() == label_b.len() - 1 {
-                            let mut b_chars: Vec<char> = label_b.chars().collect();
-                            let mut all_present = true;
-
-                            for char_a in label_a.chars() {
-                                if let Some(pos) = b_chars.iter().position(|&x| x == char_a) {
-                                    b_chars.remove(pos);
-                                } else {
-                                    all_present = false;
-                                    break;
-                                }
-                            }
-                            all_present
                         } else {
                             false
                         };
@@ -338,7 +457,7 @@ impl eframe::App for LatticeApp {
 
             ui.separator();
 
-            // 3. To Distributive Button
+            // 4. To Distributive Button
             if ui.button("To Distributed").clicked() {
                 let lattice = self.to_lattice();
                 let num_faces = lattice.faces.len();
@@ -446,7 +565,7 @@ impl eframe::App for LatticeApp {
 
             let lattice = self.to_lattice();
 
-            // 4. Existence Check
+            // 5. Existence Check
             if ui.button("Existence").clicked() {
                 let mut found = false;
                 for ham in lattice.ham_paths(self.cyclic) {
@@ -463,7 +582,7 @@ impl eframe::App for LatticeApp {
                 self.active_strip_edges = None;
             }
 
-            // 5. Count Strips
+            // 6. Count Strips
             if ui.button("Count").clicked() {
                 let mut count = 0;
                 for ham in lattice.ham_paths(self.cyclic) {
@@ -475,7 +594,7 @@ impl eframe::App for LatticeApp {
                 self.active_strip_edges = None;
             }
 
-            // 6. Show Strip
+            // 7. Show Strip
             if ui.button("Show").clicked() {
                 let mut found_strip = None;
 
@@ -524,7 +643,7 @@ impl eframe::App for LatticeApp {
 
             ui.separator();
 
-            // 7. Export TeX
+            // 8. Export TeX
             if ui.button("Export TeX").clicked() {
                 let visible_node_ids: Vec<usize> = if let Some(strip) = &self.active_strip {
                     strip.iter().flatten().map(|&x| {
@@ -597,7 +716,7 @@ impl eframe::App for LatticeApp {
                 }
             }
 
-            // 8. Restart Button
+            // 9. Restart Button
             if ui.button("Restart").clicked() {
                 self.reset();
             }

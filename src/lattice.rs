@@ -193,8 +193,8 @@ impl Lattice {
                 let v = nodes[j];
                 
                 // we check both directions u->v and v->u just to be safe
-                let id_u = (u as usize);
-                let id_v = (v as usize);
+                let id_u = u as usize;
+                let id_v = v as usize;
                 
                 let connected = self.bridges[id_u][id_v] != 255;
 
