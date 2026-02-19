@@ -8,8 +8,10 @@ use std::f64::consts::PI;
 use crate::lattice::*;
 
 // takes the layers of a rhombic strip and returns its edges as pairs of indices into l.faces
-pub fn edges_strip(layers: &Vec<Vec<usize>>, l: &Lattice, cyclic: bool) -> Vec<(usize, usize)> {
+// returns edges and cyclic edges separately, since the cyclic edges need to be drawn differently for better visualization
+pub fn edges_strip(layers: &Vec<Vec<usize>>, l: &Lattice, cyclic: bool) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
     let mut edges = Vec::new();
+    let mut cyclic_edges = Vec::new();
     for k in 0..layers.len()-1 {   // iter over the layers, except the last one
         let layer = &layers[k];
         if layer.len() == 1 {
@@ -51,16 +53,16 @@ pub fn edges_strip(layers: &Vec<Vec<usize>>, l: &Lattice, cyclic: bool) -> Vec<(
             let c = layers[i][layers[i].len()-1];
             let d = layers[i+1][layers[i+1].len()-1];
             if l.faces[a as usize].upset.contains(&(d as u8)) {
-                edges.push((a, d));
+                cyclic_edges.push((a, d));
             } else if l.faces[b as usize].downset.contains(&(c as u8)) {
-                edges.push((b, c));
+                cyclic_edges.push((b, c));
             } else {
                 // only print and not panic so we get the stip shown for debugging
                 println!("Invalid cyclic strip: edge missing between first and last layer");
             }
         }
     }
-    edges
+    (edges, cyclic_edges)
 }
 
 // written by gemini 3, cause non critical and fumbly
@@ -81,7 +83,8 @@ pub fn show_strip(layers_in: &Vec<Vec<u8>>, l: &Lattice, cyclic: bool) {let laye
     .iter()
     .map(|layer| layer.iter().map(|x| *x as usize).collect())
     .collect();
-    let edges = edges_strip(&layers, l, cyclic); 
+    let (non_cyclic_edges, cyclic_edges) = edges_strip(&layers, l, cyclic); 
+    let edges = [non_cyclic_edges, cyclic_edges].concat();
 
     // 1. Calculate Layout (Coordinates)
     let mut coords: HashMap<usize, (f64, f64)> = HashMap::new();

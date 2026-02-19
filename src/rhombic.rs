@@ -6,6 +6,9 @@ fn layer_ok(layer: &Vec<u8>, cyclic: bool) -> bool {
     if layer.is_empty() {
         return true;
     }
+    if layer.iter().any(|&x| x == 255) {
+        return false; // Invalid bridge found, layer is not ok
+    }
     let mut groups = Vec::with_capacity(layer.len());
     groups.push(layer[0]);
     for &val in layer.iter().skip(1) {
