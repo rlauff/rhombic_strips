@@ -577,7 +577,7 @@ impl eframe::App for LatticeApp {
                 self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let mut found = false;
                 for ham in lattice.ham_paths(self.cyclic) {
-                    if rhombic_strip_exists(&ham, 0, &lattice, lattice.dim as usize, self.cyclic) {
+                    if strip_exists(&ham, 0, &lattice, self.cyclic) {
                         self.msg_log = "Result: A rhombic strip EXISTS!".to_string();
                         found = true;
                         break;
@@ -595,7 +595,7 @@ impl eframe::App for LatticeApp {
                 self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let mut count = 0;
                 for ham in lattice.ham_paths(self.cyclic) {
-                    let new_strips = rhombic_strips_dfs_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic);
+                    let new_strips = extensions_dfs_lazy(vec![ham], &lattice, self.cyclic);
                     count += new_strips.len();
                 }
                 self.msg_log = format!("Number of rhombic strips found: {}", count);
@@ -617,7 +617,7 @@ impl eframe::App for LatticeApp {
                     // if we have not yet displayed a strip, we use the faster find_first function to display the first one
                     // after that, we will use the crude compute all method
                     if self.num_strips_displayed == 0 {
-                        if let Some(strip) = find_first_rhombic_strip_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic) {
+                        if let Some(strip) = find_first_rhombic_strip_lazy(vec![ham], &lattice, self.cyclic) {
                             found_strip = Some(strip);
                             self.num_strips_displayed += 1; // Increment for next time
                             break;
@@ -625,7 +625,7 @@ impl eframe::App for LatticeApp {
                             continue; // No strip for this ham, try next
                         }
                     }
-                    let strips = rhombic_strips_dfs_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic);
+                    let strips = extensions_dfs_lazy(vec![ham], &lattice, self.cyclic);
                     
                     if !strips.is_empty() {
                         if num_found + strips.len() >= num_needed {

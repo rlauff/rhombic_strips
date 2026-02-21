@@ -274,15 +274,13 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: boo
 }
 
 // The main function replacing rhombic_strips_dfs_simple
-pub fn rhombic_strips_dfs_lazy(
+pub fn extensions_dfs_lazy(
     strip: Vec<Vec<u8>>, 
     l: &Lattice, 
-    max_dim: usize, 
     cyclic: bool,
 ) -> Vec<Vec<Vec<u8>>> {
 
-    // Base case: if we reached the max dimension, return the current strip
-    if max_dim == strip.len() - 1 {
+    if l.faces[*strip.last().unwrap().first().unwrap() as usize].dim == l.dim {
         return vec![strip];
     }
 
@@ -293,7 +291,7 @@ pub fn rhombic_strips_dfs_lazy(
         .map(|next_layer| {
             let mut new_strip = strip.clone();
             new_strip.push(next_layer);
-            rhombic_strips_dfs_lazy(new_strip, l, max_dim, cyclic)
+            extensions_dfs_lazy(new_strip, l, cyclic)
         })
         .flatten()
         .collect()
@@ -302,11 +300,10 @@ pub fn rhombic_strips_dfs_lazy(
 pub fn find_first_rhombic_strip_lazy(
     strip: Vec<Vec<u8>>, 
     l: &Lattice, 
-    max_dim: usize, 
     cyclic: bool,
 ) -> Option<Vec<Vec<u8>>> {
 
-    if max_dim == strip.len() - 1 {
+    if l.faces[*strip.last().unwrap().first().unwrap() as usize].dim == l.dim {
         return Some(strip);
     }
 
@@ -314,28 +311,27 @@ pub fn find_first_rhombic_strip_lazy(
         .filter_map(|next_layer| {
             let mut new_strip = strip.clone();
             new_strip.push(next_layer);
-            find_first_rhombic_strip_lazy(new_strip, l, max_dim, cyclic)
+            find_first_rhombic_strip_lazy(new_strip, l, cyclic)
         })
         .find_any(|_| true) // We just want the first one found
 }
 
 /// Optimized Existence Check using Lazy Generation + ParBridge
-pub fn rhombic_strip_exists(
+pub fn strip_exists(
     current_layer: &Vec<u8>, 
     current_dim: usize, 
     l: &Lattice, 
-    max_dim: usize, 
     cyclic: bool
 ) -> bool {
 
-    if current_dim == max_dim {
-        return true;
+    if l.faces[current_layer[0] as usize].dim == l.dim {
+        return true; // Base case: Reached top dimension, strip exists
     }
 
     let next_iter = next_layers_lazy(current_layer, l, cyclic);
     // par_bridge converts the sequential iterator into a parallel one.
     // It pulls items from the iterator on one thread and distributes processing to others.
     next_iter.par_bridge().any(|next_layer| {
-        rhombic_strip_exists(&next_layer, current_dim + 1, l, max_dim, cyclic)
+        strip_exists(&next_layer, current_dim + 1, l, cyclic)
     })
 }

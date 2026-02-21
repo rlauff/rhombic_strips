@@ -191,7 +191,7 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         levels: levels,
         bridges: bridges,
         tunnels: tunnels,
-        dim: max_dim + 1, // since dimensions are 0-indexed, we add 1 to get the count
+        dim: max_dim
     };
     l
 }
