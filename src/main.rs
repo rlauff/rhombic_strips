@@ -39,11 +39,21 @@ fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, enumer
 
     let mut number_found = 0;
     for ham in l.ham_paths(cyclic) {
-        if !count && !enumerate && !show && !show_cyclic {
+        if !count && !enumerate && !show && !show_cyclic && !show_all {
             if rhombic_strip_exists(&ham.clone(), 0, &l, l.dim.clone() as usize, cyclic) {
                 println!("A rhombic strip was found");
                 number_found = 1;
                 break;
+            }
+        } else if !count && !enumerate && !show_all {
+            println!("Checking ham cycle: {:?}", ham.iter().map(|x| l.faces[*x as usize].label.clone()).collect::<Vec<_>>());
+            // show a single strip if it exists
+            if let Some(strip) = find_first_rhombic_strip_lazy(vec![ham], &l, l.dim as usize, cyclic) {
+                show_strip(&strip, &l, show_cyclic);
+                number_found = 1;
+                break;
+            } else {
+                continue; // No strip for this ham, try next
             }
         } else {
             let new = rhombic_strips_dfs_lazy(vec![ham.clone()], &l, l.dim.clone() as usize, cyclic);

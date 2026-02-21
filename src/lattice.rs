@@ -5,6 +5,13 @@ use crate::MAX_LEVELS;
 //faces are contained in the face lattice which acts as an arena. The upset etc are saved as a list of indices to the faces in this arena.
 //a face object alone hence makes no sense
 
+// Todo: Actually test if the fixes array sizes give a performance improvement
+// Just from feel I cannot see a big difference
+// Probably the compiler was putting the vecs on the stack already because
+// we are always working with non mut Lattice objects
+// The compiler can therefore tell that the vecs will never be touched
+// time for CompilerExplorer I guess 
+
 use std::fs::read_to_string;
 use std::str;
 
@@ -16,13 +23,20 @@ pub struct Face {
     pub downset: [u8; MAX_UP_DOWN],
 }
 
+// faces contains the face objects
+// levels contains indices to faces, organized by dimension
+// given two faces of the same level, they might have a bridge one level above
+//      the bridges matrix contains the indeices to bridges, or 255 for no bridge
+// tunnels are the same, but for the level below
+// dim is the number of levels that contain an actual face
+
 #[derive(Debug)]
 pub struct Lattice {
     pub faces: Vec<Face>,
     pub levels: [[u8; MAX_UP_DOWN]; MAX_LEVELS], // fixed size arrays for better caching. 255 indicates empty
     pub bridges: [[u8; MAX_FACES]; MAX_FACES], // max number of faces is 100, so we can store the bridges in a 100x100 array. 255 indicates no bridge, otherwise the value is the index of the bridge face
+    pub tunnels: [[u8; MAX_FACES]; MAX_FACES],
     pub dim: u8,
-    // pub ham: Vec<Vec<u8>>, // to be exchanged for a impl iter that generates the hamilton paths on the fly, since storing them can be very memory intensive for large lattices
 }
 
 //bridges are precomputed and stored in the face lattice object. Note that the keys of the bridges HashMap are the edges of the graphs on this levels
@@ -30,6 +44,15 @@ pub struct Lattice {
 fn bridge(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<u8> {
     for (i, face) in faces.iter().enumerate() {
         if face.downset.contains(&f1) && face.downset.contains(&f2) {
+            return Some(i as u8);
+        }
+    }
+    None
+}
+
+fn tunnel(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<u8> {
+    for (i, face) in faces.iter().enumerate() {
+        if face.upset.contains(&f1) && face.upset.contains(&f2) {
             return Some(i as u8);
         }
     }
@@ -139,18 +162,25 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         }
     }
 
-    // generate and store bridges
+    // generate and store bridges and tunnels
     let mut bridges = [[255u8; MAX_FACES]; MAX_FACES]; // Initialize with 255 (no bridge indicator)
+    let mut tunnels = [[255u8; MAX_FACES]; MAX_FACES]; // Initialize with 255 (no tunnel indicator)
     for i in 0..faces.len() {
-        for j in 0..faces.len() {
-            if i >= j { continue };
-            
+        for j in i+1..faces.len() {
             // Check if a bridge exists between face i and face j
             if let Some(b) = bridge(&faces, i as u8, j as u8) {
                 // Bounds check for the 2D array
                 if i < MAX_FACES && j < MAX_FACES {
                     bridges[i][j] = b;
                     bridges[j][i] = b;
+                }
+            }
+            // Check if a tunnel exists between face i and face j
+            if let Some(t) = tunnel(&faces, i as u8, j as u8) {
+                // Bounds check for the 2D array
+                if i < MAX_FACES && j < MAX_FACES {
+                    tunnels[i][j] = t;
+                    tunnels[j][i] = t;
                 }
             }
         }
@@ -160,7 +190,8 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         faces: faces,
         levels: levels,
         bridges: bridges,
-        dim: max_dim,
+        tunnels: tunnels,
+        dim: max_dim + 1, // since dimensions are 0-indexed, we add 1 to get the count
     };
     l
 }

@@ -49,7 +49,7 @@ pub struct LatticeApp {
     active_strip: Option<Vec<Vec<u8>>>,
     active_strip_edges: Option<Vec<(usize, usize)>>,
     
-    num_strips_displayer: usize // track the number of strips displayed already
+    num_strips_displayed: usize // track the number of strips displayed already
 }
 
 impl LatticeApp {
@@ -69,7 +69,7 @@ impl LatticeApp {
             cyclic: false,
             active_strip: None,
             active_strip_edges: None,
-            num_strips_displayer: 0
+            num_strips_displayed: 0
         }
     }
 
@@ -156,11 +156,13 @@ impl LatticeApp {
         }
 
         let mut bridges = [[255u8; MAX_FACES]; MAX_FACES];
+        let mut tunnels = [[255u8; MAX_FACES]; MAX_FACES];
         for i in 0..faces.len() {
             for j in 0..faces.len() {
                 if i >= j { continue };
 
                 let mut bridge_idx = None;
+                let mut tunnel_idx = None;
                 for (k, face) in faces.iter().enumerate() {
                     let i_u8 = i as u8;
                     let j_u8 = j as u8;
@@ -168,8 +170,16 @@ impl LatticeApp {
                     let covers_i = face.downset.iter().take_while(|&&x| x != 255).any(|&x| x == i_u8);
                     let covers_j = face.downset.iter().take_while(|&&x| x != 255).any(|&x| x == j_u8);
 
+                    let is_covered_by_i = face.upset.iter().take_while(|&&x| x != 255).any(|&x| x == i_u8);
+                    let is_covered_by_j = face.upset.iter().take_while(|&&x| x != 255).any(|&x| x == j_u8);
+
                     if covers_i && covers_j {
                         bridge_idx = Some(k as u8);
+                        break;
+                    }
+
+                    if is_covered_by_i && is_covered_by_j {
+                        tunnel_idx = Some(k as u8);
                         break;
                     }
                 }
@@ -180,6 +190,12 @@ impl LatticeApp {
                         bridges[j][i] = b;
                     }
                 }
+                if let Some(t) = tunnel_idx {
+                    if i < MAX_FACES && j < MAX_FACES {
+                        tunnels[i][j] = t;
+                        tunnels[j][i] = t;
+                    }
+                }
             }
         }
 
@@ -187,6 +203,7 @@ impl LatticeApp {
             faces,
             levels,
             bridges,
+            tunnels,
             dim: max_dim,
         }
     }
@@ -257,7 +274,7 @@ impl eframe::App for LatticeApp {
 
             // 1. Add Vertex Button
             if ui.button("Add Nodes").clicked() {
-                self.num_strips_displayer = 0; // reset strip displayer count when generating new grid
+                self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 self.show_multi_add_dialog = true;
                 self.show_new_node_dialog = false;
                 self.new_node_name.clear();
@@ -270,7 +287,7 @@ impl eframe::App for LatticeApp {
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut self.grid_gen_input).on_hover_text("e.g. 211");
                 if ui.button("Create").clicked() {
-                    self.num_strips_displayer = 0; // reset strip displayer count when generating new grid
+                    self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                     // 1. Parse Input "211" -> [2, 1, 1]
                     let dims: Vec<u32> = self.grid_gen_input.chars()
                         .filter_map(|c| c.to_digit(10))
@@ -385,7 +402,7 @@ impl eframe::App for LatticeApp {
 
             // 3. Infer Button (UPDATED)
             if ui.button("Infer Edges").clicked() {
-                self.num_strips_displayer = 0; // reset strip displayer count when generating new grid
+                self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let mut new_edges_count = 0;
                 let mut new_relations = Vec::new();
 
@@ -448,7 +465,7 @@ impl eframe::App for LatticeApp {
 
             // 4. To Distributive Button
             if ui.button("To Distributed").clicked() {
-                self.num_strips_displayer = 0; // reset strip displayer count when generating new grid
+                self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let lattice = self.to_lattice();
                 let num_faces = lattice.faces.len();
 
@@ -557,7 +574,7 @@ impl eframe::App for LatticeApp {
 
             // 5. Existence Check
             if ui.button("Existence").clicked() {
-                self.num_strips_displayer = 0; // reset strip displayer count when generating new grid
+                self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let mut found = false;
                 for ham in lattice.ham_paths(self.cyclic) {
                     if rhombic_strip_exists(&ham, 0, &lattice, lattice.dim as usize, self.cyclic) {
@@ -575,7 +592,7 @@ impl eframe::App for LatticeApp {
 
             // 6. Count Strips
             if ui.button("Count").clicked() {
-                self.num_strips_displayer = 0; // reset strip displayer count when generating new grid
+                self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let mut count = 0;
                 for ham in lattice.ham_paths(self.cyclic) {
                     let new_strips = rhombic_strips_dfs_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic);
@@ -594,14 +611,26 @@ impl eframe::App for LatticeApp {
                 // a job for another time
                 let mut found_strip = None;
                 let mut num_found = 0;
-                let num_needed = self.num_strips_displayer + 1; // Show one more strip each time
+                let num_needed = self.num_strips_displayed + 1; // Show one more strip each time
 
                 for ham in lattice.ham_paths(self.cyclic) {
+                    // if we have not yet displayed a strip, we use the faster find_first function to display the first one
+                    // after that, we will use the crude compute all method
+                    if self.num_strips_displayed == 0 {
+                        if let Some(strip) = find_first_rhombic_strip_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic) {
+                            found_strip = Some(strip);
+                            self.num_strips_displayed += 1; // Increment for next time
+                            break;
+                        } else {
+                            continue; // No strip for this ham, try next
+                        }
+                    }
                     let strips = rhombic_strips_dfs_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic);
+                    
                     if !strips.is_empty() {
                         if num_found + strips.len() >= num_needed {
                             found_strip = Some(strips[num_needed - num_found - 1].clone());
-                            self.num_strips_displayer += 1; // Increment for next time
+                            self.num_strips_displayed += 1; // Increment for next time
                             break;
                         }
                         num_found += strips.len();
@@ -609,7 +638,7 @@ impl eframe::App for LatticeApp {
                 }
 
                 if let Some(strip) = found_strip {
-                    self.msg_log = format!("Displaying found strip number {}.", self.num_strips_displayer);
+                    self.msg_log = format!("Displaying found strip number {}.", self.num_strips_displayed);
                     self.apply_strip_layout(&strip);
 
                     let strip_usize: Vec<Vec<usize>> = strip.iter()
@@ -635,7 +664,7 @@ impl eframe::App for LatticeApp {
                     self.msg_log = "No strip found to display.".to_string();
                     self.active_strip = None;
                     self.active_strip_edges = None;
-                    self.num_strips_displayer = 0; // reset so we can cycle through strips again if desired
+                    self.num_strips_displayed = 0; // reset so we can cycle through strips again if desired
                 }
             }
 
@@ -722,7 +751,7 @@ impl eframe::App for LatticeApp {
 
             // 9. Restart Button
             if ui.button("Restart").clicked() {
-                self.num_strips_displayer = 0; // reset strip displayer count when generating new grid
+                self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 self.reset();
             }
 

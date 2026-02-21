@@ -64,7 +64,7 @@ fn duplicates_removed(v: Vec<u8>) -> Vec<u8> {
     res
 }
 
-/// LAZY GAP ASSIGNMENTS (OPTIMIZED)
+/// LAZY GAP ASSIGNMENTS
 /// Instead of generating huge intermediate iterators via multi_cartesian_product,
 /// this uses an explicit iterative Depth-First Search (DFS) stack.
 ///
@@ -238,7 +238,7 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: boo
         (false, _) => n - 1, // Linear case has one less bridge than faces
     };
 
-    let bridges: Vec<_> = (0..bridges_upper)
+    let bridges= (0..bridges_upper)
         .map(|x| l.bridges[last_layer[x] as usize][last_layer[(x+1) % n] as usize])
         .collect();
 
@@ -258,7 +258,7 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: boo
     for i in 0..n {
         let mut new_gap = Vec::with_capacity(l.faces[last_layer[i] as usize].upset.len());
         for x in l.faces[last_layer[i] as usize].upset.iter() {
-            if !bridges.contains(x) {
+            if !bridges.contains(&x) {
                 new_gap.push(*x);
             }
         }
@@ -278,7 +278,7 @@ pub fn rhombic_strips_dfs_lazy(
     strip: Vec<Vec<u8>>, 
     l: &Lattice, 
     max_dim: usize, 
-    cyclic: bool
+    cyclic: bool,
 ) -> Vec<Vec<Vec<u8>>> {
 
     // Base case: if we reached the max dimension, return the current strip
@@ -297,6 +297,26 @@ pub fn rhombic_strips_dfs_lazy(
         })
         .flatten()
         .collect()
+}
+
+pub fn find_first_rhombic_strip_lazy(
+    strip: Vec<Vec<u8>>, 
+    l: &Lattice, 
+    max_dim: usize, 
+    cyclic: bool,
+) -> Option<Vec<Vec<u8>>> {
+
+    if max_dim == strip.len() - 1 {
+        return Some(strip);
+    }
+
+    next_layers_lazy(&strip[strip.len()-1], l, cyclic).par_bridge()
+        .filter_map(|next_layer| {
+            let mut new_strip = strip.clone();
+            new_strip.push(next_layer);
+            find_first_rhombic_strip_lazy(new_strip, l, max_dim, cyclic)
+        })
+        .find_any(|_| true) // We just want the first one found
 }
 
 /// Optimized Existence Check using Lazy Generation + ParBridge
