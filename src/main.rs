@@ -40,8 +40,12 @@ fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, enumer
     let mut number_found = 0;
     for ham in l.ham_paths(cyclic) {
         if !count && !enumerate && !show && !show_cyclic && !show_all {
+<<<<<<< HEAD
             let level = Level::from_vec(ham);
             if strip_exists(&level, 0, &l, cyclic) {
+=======
+            if rhombic_strip_exists(&ham.clone(), 0, &l, l.dim.clone() as usize, cyclic) {
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
                 println!("A rhombic strip was found");
                 number_found = 1;
                 break;
@@ -49,8 +53,12 @@ fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, enumer
         } else if !count && !enumerate && !show_all {
             println!("Checking ham cycle: {:?}", ham.iter().map(|x| l.faces.get_unchecked(*x as u8).label.clone()).collect::<Vec<_>>());
             // show a single strip if it exists
+<<<<<<< HEAD
             let levels = Levels::single_level_from_vec(ham);
             if let Some(strip) = find_first_rhombic_strip_lazy(levels, &l, cyclic) {
+=======
+            if let Some(strip) = find_first_rhombic_strip_lazy(vec![ham], &l, l.dim as usize, cyclic) {
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
                 show_strip(&strip, &l, show_cyclic);
                 number_found = 1;
                 break;
@@ -58,7 +66,7 @@ fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, enumer
                 continue; // No strip for this ham, try next
             }
         } else {
-            let new = extensions_dfs_lazy(vec![ham.clone()], &l, cyclic);
+            let new = rhombic_strips_dfs_lazy(vec![ham.clone()], &l, l.dim.clone() as usize, cyclic);
             number_found += new.len();
             if enumerate {
                 println!("{:?}: {}", ham.iter().map(|x| l.faces.get_unchecked(*x as u8).label.clone()).collect::<Vec<_>>(), new.len());

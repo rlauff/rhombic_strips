@@ -572,8 +572,12 @@ impl eframe::App for LatticeApp {
                 self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let mut found = false;
                 for ham in lattice.ham_paths(self.cyclic) {
+<<<<<<< HEAD
                     let level = Level::from_vec(ham);
                     if strip_exists(&level, 0, &lattice, self.cyclic) {
+=======
+                    if rhombic_strip_exists(&ham, 0, &lattice, lattice.dim as usize, self.cyclic) {
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
                         self.msg_log = "Result: A rhombic strip EXISTS!".to_string();
                         found = true;
                         break;
@@ -591,8 +595,12 @@ impl eframe::App for LatticeApp {
                 self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let mut count = 0;
                 for ham in lattice.ham_paths(self.cyclic) {
+<<<<<<< HEAD
                     let levels = Levels::single_level_from_vec(ham);
                     let new_strips = extensions_dfs_lazy(levels, &lattice, self.cyclic);
+=======
+                    let new_strips = rhombic_strips_dfs_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic);
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
                     count += new_strips.len();
                 }
                 self.msg_log = format!("Number of rhombic strips found: {}", count);
@@ -614,8 +622,12 @@ impl eframe::App for LatticeApp {
                     // if we have not yet displayed a strip, we use the faster find_first function to display the first one
                     // after that, we will use the crude compute all method
                     if self.num_strips_displayed == 0 {
+<<<<<<< HEAD
                         let levels = Levels::single_level_from_vec(ham);
                         if let Some(strip) = find_first_rhombic_strip_lazy(levels, &lattice, self.cyclic) {
+=======
+                        if let Some(strip) = find_first_rhombic_strip_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic) {
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
                             found_strip = Some(strip);
                             self.num_strips_displayed += 1; // Increment for next time
                             break;
@@ -623,8 +635,12 @@ impl eframe::App for LatticeApp {
                             continue; // No strip for this ham, try next
                         }
                     }
+<<<<<<< HEAD
                     let levels = Levels::single_level_from_vec(ham);
                     let strips = extensions_dfs_lazy(levels, &lattice, self.cyclic);
+=======
+                    let strips = rhombic_strips_dfs_lazy(vec![ham], &lattice, lattice.dim as usize, self.cyclic);
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
                     
                     if !strips.is_empty() {
                         if num_found + strips.len() >= num_needed {

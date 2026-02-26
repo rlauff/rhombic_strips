@@ -393,8 +393,13 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         faces: faces,
         levels: levels,
         bridges: bridges,
+<<<<<<< HEAD
         _tunnels: tunnels,
         dim: max_dim
+=======
+        tunnels: tunnels,
+        dim: max_dim + 1, // since dimensions are 0-indexed, we add 1 to get the count
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
     };
     l
 }

@@ -268,13 +268,24 @@ pub fn next_layers_lazy<'a>(
 }
 
 // The main function replacing rhombic_strips_dfs_simple
+<<<<<<< HEAD
 pub fn extensions_dfs_lazy(
     strip: Levels, 
+=======
+pub fn rhombic_strips_dfs_lazy(
+    strip: Vec<Vec<u8>>, 
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
     l: &Lattice, 
+    max_dim: usize, 
     cyclic: bool,
 ) -> Vec<Levels> {
 
+<<<<<<< HEAD
     if strip.len() == l.dim as usize {
+=======
+    // Base case: if we reached the max dimension, return the current strip
+    if max_dim == strip.len() - 1 {
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
         return vec![strip];
     }
 
@@ -285,7 +296,7 @@ pub fn extensions_dfs_lazy(
         .map(|next_layer| {
             let mut new_strip = strip.clone();
             new_strip.push(next_layer);
-            extensions_dfs_lazy(new_strip, l, cyclic)
+            rhombic_strips_dfs_lazy(new_strip, l, max_dim, cyclic)
         })
         .flatten()
         .collect()
@@ -294,10 +305,15 @@ pub fn extensions_dfs_lazy(
 pub fn find_first_rhombic_strip_lazy(
     strip: Levels, 
     l: &Lattice, 
+    max_dim: usize, 
     cyclic: bool,
 ) -> Option<Levels> {
 
+<<<<<<< HEAD
     if strip.len() == l.dim as usize {
+=======
+    if max_dim == strip.len() - 1 {
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
         return Some(strip);
     }
 
@@ -305,27 +321,38 @@ pub fn find_first_rhombic_strip_lazy(
         .filter_map(|next_layer| {
             let mut new_strip = strip.clone();
             new_strip.push(next_layer);
-            find_first_rhombic_strip_lazy(new_strip, l, cyclic)
+            find_first_rhombic_strip_lazy(new_strip, l, max_dim, cyclic)
         })
         .find_any(|_| true) // We just want the first one found
 }
 
 /// Optimized Existence Check using Lazy Generation + ParBridge
+<<<<<<< HEAD
 pub fn strip_exists(
     current_layer: &Level, 
+=======
+pub fn rhombic_strip_exists(
+    current_layer: &Vec<u8>, 
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
     current_dim: usize, 
     l: &Lattice, 
+    max_dim: usize, 
     cyclic: bool
 ) -> bool {
 
+<<<<<<< HEAD
     if l.faces.get_unchecked(current_layer.get_unchecked(0)).dim == l.dim {
         return true; // Base case: Reached top dimension, strip exists
+=======
+    if current_dim == max_dim {
+        return true;
+>>>>>>> parent of 6b32246 (removed dependency on max_dim in all the functions. The max dim is already in the Lattice struct, so no need to pass it around)
     }
 
     let next_iter = next_layers_lazy(current_layer, l, cyclic);
     // par_bridge converts the sequential iterator into a parallel one.
     // It pulls items from the iterator on one thread and distributes processing to others.
     next_iter.par_bridge().any(|next_layer| {
-        strip_exists(&next_layer, current_dim + 1, l, cyclic)
+        rhombic_strip_exists(&next_layer, current_dim + 1, l, max_dim, cyclic)
     })
 }
