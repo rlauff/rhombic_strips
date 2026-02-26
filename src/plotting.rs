@@ -21,7 +21,7 @@ pub fn edges_strip(layers: &Vec<Vec<usize>>, l: &Lattice, cyclic: bool) -> (Vec<
         }
         let n = layer.len();
         let bridges: Vec<_> = (0..n-1)
-        .map(|x| l.bridges[layer[x] as usize][layer[x + 1] as usize])
+        .map(|x| l.bridges.get_unchecked(layer[x] as u8, layer[x + 1] as u8))
         .collect();
         // the bridge at index i is above elements layer[i] and layer[i+1], so we add edges from both of them to the bridge
         for i in 0..(layer.len()-1) {
@@ -52,9 +52,9 @@ pub fn edges_strip(layers: &Vec<Vec<usize>>, l: &Lattice, cyclic: bool) -> (Vec<
             let b = layers[i+1][0];
             let c = layers[i][layers[i].len()-1];
             let d = layers[i+1][layers[i+1].len()-1];
-            if l.faces[a as usize].upset.contains(&(d as u8)) {
+            if l.faces.get_unchecked(a as u8).upset.contains(&(d as u8)) {
                 cyclic_edges.push((a, d));
-            } else if l.faces[b as usize].downset.contains(&(c as u8)) {
+            } else if l.faces.get_unchecked(b as u8).downset.contains(&(c as u8)) {
                 cyclic_edges.push((b, c));
             } else {
                 // only print and not panic so we get the stip shown for debugging
@@ -317,7 +317,7 @@ pub fn show_strip(layers_in: &Vec<Vec<u8>>, l: &Lattice, cyclic: bool) {let laye
     // Calculate max label length
     let mut max_label_len: usize = 0;
     for face_idx in coords.keys() {
-        let label_len = l.faces[*face_idx].label.to_string().len();
+        let label_len = l.faces.get_unchecked(*face_idx as u8).label.to_string().len();
         if label_len > max_label_len { max_label_len = label_len; }
     }
 
@@ -396,7 +396,7 @@ pub fn show_strip(layers_in: &Vec<Vec<u8>>, l: &Lattice, cyclic: bool) {let laye
     // Draw Nodes
     let mut node_defs = Vec::new();
     for face_idx in coords.keys() {
-        let label = &l.faces[*face_idx].label;
+        let label = &l.faces.get_unchecked(*face_idx as u8).label;
         let safe_label = label.to_string().replace("_", "\\_"); 
         node_defs.push(format!("n{}/{}", face_idx, safe_label));
     }

@@ -46,7 +46,7 @@ fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, enumer
                 break;
             }
         } else if !count && !enumerate && !show_all {
-            println!("Checking ham cycle: {:?}", ham.iter().map(|x| l.faces[*x as usize].label.clone()).collect::<Vec<_>>());
+            println!("Checking ham cycle: {:?}", ham.iter().map(|x| l.faces.get_unchecked(*x as u8).label.clone()).collect::<Vec<_>>());
             // show a single strip if it exists
             if let Some(strip) = find_first_rhombic_strip_lazy(vec![ham], &l, cyclic) {
                 show_strip(&strip, &l, show_cyclic);
@@ -59,13 +59,13 @@ fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, enumer
             let new = extensions_dfs_lazy(vec![ham.clone()], &l, cyclic);
             number_found += new.len();
             if enumerate {
-                println!("{:?}: {}", ham.iter().map(|x| l.faces[*x as usize].label.clone()).collect::<Vec<_>>(), new.len());
+                println!("{:?}: {}", ham.iter().map(|x| l.faces.get_unchecked(*x as u8).label.clone()).collect::<Vec<_>>(), new.len());
             }
             if show || show_cyclic {
                 for strip in new.iter() {
                     show_strip(strip, &l, show_cyclic);
                     for layer in strip.iter() {
-                        println!("{:?}", layer.iter().map(|x| l.faces[*x as usize].label.clone()).collect::<Vec<_>>());
+                        println!("{:?}", layer.iter().map(|x| l.faces.get_unchecked(*x as u8).label.clone()).collect::<Vec<_>>());
                     }
                     if !show_all { break; };
                 }

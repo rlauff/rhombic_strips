@@ -10,17 +10,187 @@ use crate::MAX_LEVELS;
 // Probably the compiler was putting the vecs on the stack already because
 // we are always working with non mut Lattice objects
 // The compiler can therefore tell that the vecs will never be touched
-// time for CompilerExplorer I guess 
+// time for CompilerExplorer I guess
 
 use std::fs::read_to_string;
 use std::str;
 
-#[derive(Debug)]
+// unit types for stricter type checking
+
+#[derive(Copy, Clone, Debug)]
+pub struct Level{ faces: [u8; MAX_UP_DOWN] }
+impl Level {
+    pub fn get_unchecked(&self, index: u8) -> u8 {
+        self.faces[index as usize]
+    }
+    pub fn iter(&self) -> LevelIter<'_> {
+        LevelIter::new(self)
+    }
+}
+
+pub struct LevelIter<'a> {
+    level: &'a Level,
+    level_index: usize,
+}
+impl<'a> LevelIter<'a> {
+    pub fn new(level: &'a Level) -> Self {
+        LevelIter { level, level_index: 0 }
+    }
+}
+impl<'a> Iterator for LevelIter<'a> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.level_index < MAX_UP_DOWN {
+            let face = self.level.faces[self.level_index];
+            self.level_index += 1;
+            Some(face)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Levels{ levels: [Level; MAX_LEVELS] }
+impl Levels {
+    pub fn new() -> Self {
+        Levels{ levels: [Level{ faces: [255u8; MAX_UP_DOWN] }; MAX_LEVELS] } // Initialize with 255 (empty indicator)
+    }
+    pub fn _get_index_unchecked(&self, i: u8, j: u8) -> u8 {
+        self.levels[i as usize].faces[j as usize]
+    }
+    pub fn _get_unchecked(&self, d: u8) -> &[u8; MAX_UP_DOWN] {
+        &self.levels[d as usize].faces
+    }
+    pub fn set_unchecked(&mut self, d: u8, value: u8) {
+        // fill the first 255 by the given value
+        for j in 0..MAX_UP_DOWN {
+            if self.levels[d as usize].faces[j] == 255 {
+                self.levels[d as usize].faces[j] = value;
+                break;
+            }
+        }
+    }
+    pub fn into_iter(&self, d: u8) -> LevelIter<'_> {
+        LevelIter::new(&self.levels[d as usize])
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Bridge{ faces_indices: [u8; MAX_FACES] }
+
+#[derive(Copy, Clone, Debug)]
+pub struct Bridges{ bridges: [Bridge; MAX_FACES] }
+impl Bridges {
+    pub fn new() -> Self {
+        Bridges{ bridges: [Bridge{ faces_indices: [255u8; MAX_FACES] }; MAX_FACES] } // Initialize with 255 (no bridge indicator)
+    }
+    pub fn get_unchecked(&self, i: u8, j: u8) -> u8 {
+        self.bridges[i as usize].faces_indices[j as usize]
+    }
+    pub fn set_unchecked(&mut self, i: u8, j: u8, value: u8) {
+        self.bridges[i as usize].faces_indices[j as usize] = value;
+        self.bridges[j as usize].faces_indices[i as usize] = value; // Ensure symmetry
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Tunnel{ faces_indices: [u8; MAX_FACES] }
+
+#[derive(Copy, Clone, Debug)]
+pub struct Tunnels{ tunnels: [Tunnel; MAX_FACES] }
+impl Tunnels {
+    pub fn new() -> Self {
+        Tunnels{ tunnels: [Tunnel{ faces_indices: [255u8; MAX_FACES] }; MAX_FACES] } // Initialize with 255 (no tunnel indicator)
+    }
+    pub fn _get_unchecked(&self, i: u8, j: u8) -> u8 {
+        self.tunnels[i as usize].faces_indices[j as usize]
+    }
+    pub fn set_unchecked(&mut self, i: u8, j: u8, value: u8) {
+        self.tunnels[i as usize].faces_indices[j as usize] = value;
+        self.tunnels[j as usize].faces_indices[i as usize] = value; // Ensure symmetry
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UpDownSet {
+    pub faces: [u8; MAX_UP_DOWN], // fixed size arrays for better caching. 255 indicates empty
+}
+impl UpDownSet {
+    pub fn new() -> Self {
+        UpDownSet { faces: [255u8; MAX_UP_DOWN] } // Initialize with 255 (empty indicator)
+    }
+    pub fn _get_unchecked(&self, index: u8) -> u8 {
+        self.faces[index as usize]
+    }
+    pub fn contains(&self, value: &u8) -> bool {
+        self.faces.iter().any(|&x| x == *value)
+    }
+    pub fn iter(&self) -> UpDownSetIter<'_> {
+        UpDownSetIter::new(self)
+    }
+    pub fn push(&mut self, value: u8) {
+        for i in 0..MAX_UP_DOWN {
+            if self.faces[i] == 255 {
+                self.faces[i] = value;
+                return;
+            }
+        }
+        panic!("UpDownSet is full, cannot push more values");
+    }
+}
+pub struct UpDownSetIter<'a> {
+    set: &'a UpDownSet,
+    index: usize,
+}
+impl<'a> UpDownSetIter<'a> {
+    pub fn new(set: &'a UpDownSet) -> Self {
+        UpDownSetIter { set, index: 0 }
+    }
+}
+impl<'a> Iterator for UpDownSetIter<'a> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for &face in self.set.faces.iter().skip(self.index) {
+            if face != 255 { // 255 indicates an empty slot
+                self.index += 1;
+                return Some(face);
+            } else {
+                break; // Since we fill from the start, we can stop at the first 255
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Face {
     pub label: String,
     pub dim: u8,
-    pub upset: [u8; MAX_UP_DOWN],        // fixed size arrays for better caching. 255 indicates empty
-    pub downset: [u8; MAX_UP_DOWN],
+    pub upset: UpDownSet,        // fixed size arrays for better caching. 255 indicates empty
+    pub downset: UpDownSet,
+}
+
+#[derive(Clone, Debug)]
+pub struct Faces{ faces: Vec<Face> }
+impl Faces {
+    pub fn get_unchecked(&self, index: u8) -> &Face {
+        &self.faces[index as usize]
+    }
+    pub fn new() -> Self {
+        Faces { faces: Vec::new() }
+    }
+    pub fn push(&mut self, face: Face) {
+        self.faces.push(face);
+    }
+    pub fn iter(&self) -> std::slice::Iter<'_, Face> {
+        self.faces.iter()
+    }
+    pub fn len(&self) -> usize {
+        self.faces.len()
+    }
 }
 
 // faces contains the face objects
@@ -32,17 +202,26 @@ pub struct Face {
 
 #[derive(Debug)]
 pub struct Lattice {
-    pub faces: Vec<Face>,
-    pub levels: [[u8; MAX_UP_DOWN]; MAX_LEVELS], // fixed size arrays for better caching. 255 indicates empty
-    pub bridges: [[u8; MAX_FACES]; MAX_FACES], // max number of faces is 100, so we can store the bridges in a 100x100 array. 255 indicates no bridge, otherwise the value is the index of the bridge face
-    pub tunnels: [[u8; MAX_FACES]; MAX_FACES],
+    pub faces: Faces,
+    pub levels: Levels, // fixed size arrays for better caching. 255 indicates empty
+    pub bridges: Bridges, // max number of faces is 100, so we can store the bridges in a 100x100 array. 255 indicates no bridge, otherwise the value is the index of the bridge face
+    pub _tunnels: Tunnels,
     pub dim: u8,
+}
+
+impl Lattice {
+    pub fn get_bridge_unchecked(&self, f1: u8, f2: u8) -> u8 {
+        self.bridges.get_unchecked(f1, f2)
+    }
+    pub fn _is_bridge(&self, f1: u8, f2: u8) -> bool {
+        self.bridges.get_unchecked(f1, f2) != 255
+    }
 }
 
 //bridges are precomputed and stored in the face lattice object. Note that the keys of the bridges HashMap are the edges of the graphs on this levels
 
-fn bridge(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<u8> {
-    for (i, face) in faces.iter().enumerate() {
+fn bridge(faces: &Faces, f1: u8, f2: u8) -> Option<u8> {
+    for (i, face) in faces.faces.iter().enumerate() {
         if face.downset.contains(&f1) && face.downset.contains(&f2) {
             return Some(i as u8);
         }
@@ -50,8 +229,8 @@ fn bridge(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<u8> {
     None
 }
 
-fn tunnel(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<u8> {
-    for (i, face) in faces.iter().enumerate() {
+fn tunnel(faces: &Faces, f1: u8, f2: u8) -> Option<u8> {
+    for (i, face) in faces.faces.iter().enumerate() {
         if face.upset.contains(&f1) && face.upset.contains(&f2) {
             return Some(i as u8);
         }
@@ -61,7 +240,7 @@ fn tunnel(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<u8> {
 
 pub fn lattice_from_file(file: &str) -> Lattice {
     // read and store faces as in the file
-    let mut faces: Vec<Face> = vec![];
+    let mut faces = Faces::new(); // Initialize with an empty vector
     
     // We expect the file to exist at the path provided
     let content = read_to_string(file).expect("reading file failed");
@@ -95,7 +274,7 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         // upset
         // Remove the leading '{' and any surrounding whitespace
         let upset_clean = set_strings[0].trim_start_matches('{').trim();
-        let mut upset = [255u8; MAX_UP_DOWN]; // Initialize with 255 (empty indicator)
+        let mut upset = UpDownSet::new(); // Initialize with 255 (empty indicator)
         let mut upset_count = 0;     // Counter to act as a stack pointer
 
         if !upset_clean.is_empty() {
@@ -107,7 +286,7 @@ pub fn lattice_from_file(file: &str) -> Lattice {
                 
                 // Logic fix: "push" the value into the next available slot
                 if upset_count < MAX_UP_DOWN {
-                    upset[upset_count] = val as u8; 
+                    upset.faces[upset_count] = val as u8; 
                     upset_count += 1;
                 } else {
                     panic!("Upset count exceeds maximum allowed size of {}", MAX_UP_DOWN);
@@ -118,7 +297,7 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         // downset
         // Remove the trailing '}' and any surrounding whitespace
         let downset_clean = set_strings[1].trim_end_matches('}').trim();
-        let mut downset = [255u8; MAX_UP_DOWN]; // Initialize with 255 (empty indicator)
+        let mut downset = UpDownSet::new(); // Initialize with 255 (empty indicator)
         let mut downset_count = 0;     // Counter to act as a stack pointer
 
         if !downset_clean.is_empty() {
@@ -130,7 +309,7 @@ pub fn lattice_from_file(file: &str) -> Lattice {
 
                 // Logic fix: "push" the value into the next available slot
                 if downset_count < MAX_UP_DOWN {
-                    downset[downset_count] = val as u8;
+                    downset.faces[downset_count] = val as u8;
                     downset_count += 1;
                 } else {
                     panic!("Downset count exceeds maximum allowed size of {}", MAX_UP_DOWN);
@@ -150,37 +329,33 @@ pub fn lattice_from_file(file: &str) -> Lattice {
 
     // make levels
     let max_dim = faces.iter().map(|x| x.dim).max().unwrap_or(0);
-    let mut levels = [[255u8; MAX_UP_DOWN]; MAX_LEVELS]; // Initialize with 255 (empty indicator)
-    let mut count_per_dim = [0u8; MAX_LEVELS]; // To keep track of how many faces we have added to each dimension level
+    let mut levels = Levels::new(); // Initialize with 255 (empty indicator)
     
     for (i, face) in faces.iter().enumerate() {
         let d = face.dim as usize;
         // Check bounds to prevent panics
-        if d < MAX_LEVELS && (count_per_dim[d] as usize) < MAX_UP_DOWN {
-             levels[d][count_per_dim[d] as usize] = i as u8; // Store the index directly
-             count_per_dim[d] += 1;
+        if d < MAX_LEVELS {
+             levels.set_unchecked(d as u8, i as u8); // Store the index directly
         }
     }
 
     // generate and store bridges and tunnels
-    let mut bridges = [[255u8; MAX_FACES]; MAX_FACES]; // Initialize with 255 (no bridge indicator)
-    let mut tunnels = [[255u8; MAX_FACES]; MAX_FACES]; // Initialize with 255 (no tunnel indicator)
+    let mut bridges = Bridges::new(); // Initialize with 255 (no bridge indicator)
+    let mut tunnels = Tunnels::new(); // Initialize with 255 (no tunnel indicator)
     for i in 0..faces.len() {
         for j in i+1..faces.len() {
             // Check if a bridge exists between face i and face j
             if let Some(b) = bridge(&faces, i as u8, j as u8) {
                 // Bounds check for the 2D array
                 if i < MAX_FACES && j < MAX_FACES {
-                    bridges[i][j] = b;
-                    bridges[j][i] = b;
+                    bridges.set_unchecked(i as u8, j as u8, b);
                 }
             }
             // Check if a tunnel exists between face i and face j
             if let Some(t) = tunnel(&faces, i as u8, j as u8) {
                 // Bounds check for the 2D array
                 if i < MAX_FACES && j < MAX_FACES {
-                    tunnels[i][j] = t;
-                    tunnels[j][i] = t;
+                    tunnels.set_unchecked(i as u8, j as u8, t);
                 }
             }
         }
@@ -190,22 +365,22 @@ pub fn lattice_from_file(file: &str) -> Lattice {
         faces: faces,
         levels: levels,
         bridges: bridges,
-        tunnels: tunnels,
+        _tunnels: tunnels,
         dim: max_dim
     };
     l
 }
 
 impl Lattice {
+
     // Create an iterator that generates hamilton paths or cycles lazily
     // This avoids allocating a massive Vec<Vec<usize>> and allows stopping early
     pub fn ham_paths(&self, cyclic: bool) -> HamiltonianIter {
         // check if the first layer exists
         // we filter out 255 (empty slots) to get actual nodes
-        let nodes: Vec<u8> = self.levels[0]
-            .iter()
-            .filter(|&&n| n != 255)
-            .cloned()
+        let nodes: Vec<u8> = self.levels
+            .into_iter(0)
+            .filter(|&n| n != 255u8)
             .collect();
 
         if nodes.is_empty() {
@@ -222,12 +397,7 @@ impl Lattice {
             for j in (i + 1)..num_nodes {
                 let u = nodes[i];
                 let v = nodes[j];
-                
-                // we check both directions u->v and v->u just to be safe
-                let id_u = u as usize;
-                let id_v = v as usize;
-                
-                let connected = self.bridges[id_u][id_v] != 255;
+                let connected = self.bridges.get_unchecked(u, v) != 255;
 
                 if connected {
                     adj[u as usize].push(v);

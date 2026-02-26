@@ -4,7 +4,6 @@ use std::fs;
 
 // Assumed constants from your crate
 use crate::MAX_FACES;
-use crate::MAX_UP_DOWN;
 use crate::MAX_LEVELS;
 
 // Assumed Imports from your crate
@@ -102,7 +101,7 @@ impl LatticeApp {
     }
 
     fn to_lattice(&self) -> Lattice {
-        let mut faces: Vec<Face> = Vec::new();
+        let mut faces= Faces::new();
         let dims = self.compute_dimensions();
 
         let id_to_index: HashMap<usize, usize> = self.nodes.iter()
@@ -111,8 +110,8 @@ impl LatticeApp {
             .collect();
 
         for node in &self.nodes {
-            let mut upset = [255u8; MAX_UP_DOWN];
-            let mut downset = [255u8; MAX_UP_DOWN];
+            let mut upset = UpDownSet::new();
+            let mut downset = UpDownSet::new();
             let mut u_count = 0;
             let mut d_count = 0;
 
@@ -120,7 +119,7 @@ impl LatticeApp {
                 if *from == node.id {
                     if let Some(&to_idx) = id_to_index.get(to) {
                         if u_count < 50 {
-                            upset[u_count] = to_idx as u8;
+                            upset.push(to_idx as u8);
                             u_count += 1;
                         }
                     }
@@ -128,7 +127,7 @@ impl LatticeApp {
                 if *to == node.id {
                     if let Some(&from_idx) = id_to_index.get(from) {
                         if d_count < 50 {
-                            downset[d_count] = from_idx as u8;
+                            downset.push(from_idx as u8);
                             d_count += 1;
                         }
                     }
@@ -144,19 +143,17 @@ impl LatticeApp {
         }
 
         let max_dim = faces.iter().map(|f| f.dim).max().unwrap_or(0);
-        let mut levels = [[255u8; MAX_UP_DOWN]; MAX_LEVELS];
-        let mut count_per_dim = [0u8; MAX_LEVELS];
+        let mut levels = Levels::new(); // Initialize with 255 (empty indicator)
 
         for (i, face) in faces.iter().enumerate() {
             let d = face.dim as usize;
-            if d < MAX_LEVELS && (count_per_dim[d] as usize) < MAX_UP_DOWN {
-                levels[d][count_per_dim[d] as usize] = i as u8;
-                count_per_dim[d] += 1;
+            if d < MAX_LEVELS  {
+                levels.set_unchecked(d as u8, i as u8);
             }
         }
 
-        let mut bridges = [[255u8; MAX_FACES]; MAX_FACES];
-        let mut tunnels = [[255u8; MAX_FACES]; MAX_FACES];
+        let mut bridges = Bridges::new();
+        let mut tunnels = Tunnels::new();
         for i in 0..faces.len() {
             for j in 0..faces.len() {
                 if i >= j { continue };
@@ -167,11 +164,11 @@ impl LatticeApp {
                     let i_u8 = i as u8;
                     let j_u8 = j as u8;
 
-                    let covers_i = face.downset.iter().take_while(|&&x| x != 255).any(|&x| x == i_u8);
-                    let covers_j = face.downset.iter().take_while(|&&x| x != 255).any(|&x| x == j_u8);
+                    let covers_i = face.downset.iter().take_while(|&x| x != 255).any(|x| x == i_u8);
+                    let covers_j = face.downset.iter().take_while(|&x| x != 255).any(|x| x == j_u8);
 
-                    let is_covered_by_i = face.upset.iter().take_while(|&&x| x != 255).any(|&x| x == i_u8);
-                    let is_covered_by_j = face.upset.iter().take_while(|&&x| x != 255).any(|&x| x == j_u8);
+                    let is_covered_by_i = face.upset.iter().take_while(|&x| x != 255).any(|x| x == i_u8);
+                    let is_covered_by_j = face.upset.iter().take_while(|&x| x != 255).any(|x| x == j_u8);
 
                     if covers_i && covers_j {
                         bridge_idx = Some(k as u8);
@@ -186,14 +183,12 @@ impl LatticeApp {
 
                 if let Some(b) = bridge_idx {
                     if i < MAX_FACES && j < MAX_FACES {
-                        bridges[i][j] = b;
-                        bridges[j][i] = b;
+                        bridges.set_unchecked(i as u8, j as u8, b);
                     }
                 }
                 if let Some(t) = tunnel_idx {
                     if i < MAX_FACES && j < MAX_FACES {
-                        tunnels[i][j] = t;
-                        tunnels[j][i] = t;
+                        tunnels.set_unchecked(i as u8, j as u8, t);
                     }
                 }
             }
@@ -203,7 +198,7 @@ impl LatticeApp {
             faces,
             levels,
             bridges,
-            tunnels,
+            _tunnels: tunnels,
             dim: max_dim,
         }
     }
@@ -483,9 +478,9 @@ impl eframe::App for LatticeApp {
 
                         for i in 0..num_faces {
                             if (mask >> i) & 1 == 1 {
-                                current_subset_labels.push(lattice.faces[i].label.clone());
-                                let downset = &lattice.faces[i].downset;
-                                for &d in downset.iter() {
+                                current_subset_labels.push(lattice.faces.get_unchecked(i as u8).label.clone());
+                                let downset = &lattice.faces.get_unchecked(i as u8).downset;
+                                for d in downset.iter() {
                                     if d == 255 { break; }
                                     if (mask >> d) & 1 == 0 {
                                         is_ideal = false;
