@@ -79,11 +79,13 @@ pub fn edges_strip(layers: &Vec<Vec<usize>>, l: &Lattice, cyclic: bool) -> (Vec<
 // then we draw the edges using \foreach\a/\b in {edges} { \draw (\a) -- (\b); }
 // then we draw the faces using \foreach\label in {labels} { \node[draw, fill=white] at (label) {\label}; }
 
-pub fn show_strip(layers_in: &Vec<Vec<u8>>, l: &Lattice, cyclic: bool) {let layers: Vec<Vec<usize>> = layers_in
+pub fn show_strip(levels_in: &Levels, l: &Lattice, cyclic: bool) {
+    let levels: Vec<Vec<usize>> = 
+    levels_in
     .iter()
-    .map(|layer| layer.iter().map(|x| *x as usize).collect())
+    .map(|level| level.iter().map(|x| *x as usize).collect())
     .collect();
-    let (non_cyclic_edges, cyclic_edges) = edges_strip(&layers, l, cyclic); 
+    let (non_cyclic_edges, cyclic_edges) = edges_strip(&levels, l, cyclic); 
     let edges = [non_cyclic_edges, cyclic_edges].concat();
 
     // 1. Calculate Layout (Coordinates)
@@ -97,7 +99,7 @@ pub fn show_strip(layers_in: &Vec<Vec<u8>>, l: &Lattice, cyclic: bool) {let laye
     
     // Map face_idx -> layer_idx for quick lookup
     let mut face_to_layer_idx: HashMap<usize, usize> = HashMap::new();
-    for (i, layer) in layers.iter().enumerate() {
+    for (i, layer) in levels.iter().enumerate() {
         for &face in layer {
             face_to_layer_idx.insert(face, i);
         }
@@ -112,10 +114,10 @@ pub fn show_strip(layers_in: &Vec<Vec<u8>>, l: &Lattice, cyclic: bool) {let laye
 
     // Store calculated angles (radians)
     let mut face_angles: HashMap<usize, f64> = HashMap::new();
-    let mut layer_radii: Vec<f64> = Vec::with_capacity(layers.len());
+    let mut layer_radii: Vec<f64> = Vec::with_capacity(levels.len());
 
     // --- Iterative Layer Processing ---
-    for (layer_idx, layer) in layers.iter().enumerate() {
+    for (layer_idx, layer) in levels.iter().enumerate() {
         let count = layer.len() as f64;
         
         // --- Step A: Determine Angles ---

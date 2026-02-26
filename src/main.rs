@@ -40,7 +40,8 @@ fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, enumer
     let mut number_found = 0;
     for ham in l.ham_paths(cyclic) {
         if !count && !enumerate && !show && !show_cyclic && !show_all {
-            if strip_exists(&ham.clone(), 0, &l, cyclic) {
+            let level = Level::from_vec(ham);
+            if strip_exists(&level, 0, &l, cyclic) {
                 println!("A rhombic strip was found");
                 number_found = 1;
                 break;
@@ -48,7 +49,8 @@ fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, enumer
         } else if !count && !enumerate && !show_all {
             println!("Checking ham cycle: {:?}", ham.iter().map(|x| l.faces.get_unchecked(*x as u8).label.clone()).collect::<Vec<_>>());
             // show a single strip if it exists
-            if let Some(strip) = find_first_rhombic_strip_lazy(vec![ham], &l, cyclic) {
+            let levels = Levels::single_level_from_vec(ham);
+            if let Some(strip) = find_first_rhombic_strip_lazy(levels, &l, cyclic) {
                 show_strip(&strip, &l, show_cyclic);
                 number_found = 1;
                 break;

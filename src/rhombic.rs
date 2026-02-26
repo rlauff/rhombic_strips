@@ -2,16 +2,13 @@ use crate::{MAX_LEVELS, MAX_UP_DOWN, lattice::*};
 use rayon::prelude::*;
 use std::iter::Iterator;
 
-fn layer_ok(layer: &Vec<u8>, cyclic: bool) -> bool {
-    if layer.is_empty() {
+fn layer_ok(level: &Level, cyclic: bool) -> bool {
+    if level.is_empty() {
         return true;
     }
-    if layer.iter().any(|&x| x == 255) {
-        return false; // Invalid bridge found, layer is not ok
-    }
-    let mut groups = Vec::with_capacity(layer.len());
-    groups.push(layer[0]);
-    for &val in layer.iter().skip(1) {
+    let mut groups = Vec::with_capacity(level.len());
+    groups.push(level.get_unchecked(0u8));
+    for val in level.iter().skip(1) {
         if val != *groups.last().unwrap() {
             groups.push(val);
         }
@@ -33,35 +30,35 @@ fn layer_ok(layer: &Vec<u8>, cyclic: bool) -> bool {
     true
 }
 
-fn combine_to_layer(bridges: &Vec<u8>, gaps: &Vec<Vec<u8>>) -> Vec<u8> {
+fn combine_to_level(bridges: &Vec<u8>, gaps: &Vec<Vec<u8>>) -> Level {
     // Optimization: Calculate exact size needed
     let total_len = bridges.len() + gaps.iter().map(|g| g.len()).sum::<usize>();
-    let mut layer = Vec::with_capacity(total_len);
+    let mut level_vec = Vec::with_capacity(total_len);
 
     for i in 0..bridges.len() {
         // Gaps in lazy iterator come as Vec<usize>, simply push contents
         // Optimization: Use extend_from_slice for bulk copy
-        layer.extend_from_slice(&gaps[i]);
-        layer.push(bridges[i]);
+        level_vec.extend_from_slice(&gaps[i]);
+        level_vec.push(bridges[i]);
     }
     if gaps.len() > bridges.len() {
         // Optimization: Avoid clone(), use extend directly
-        layer.extend_from_slice(&gaps[gaps.len()-1]); 
+        level_vec.extend_from_slice(&gaps[gaps.len()-1]); 
     }
-    layer
+    Level { faces: level_vec }
 }
 
-fn duplicates_removed(v: Vec<u8>) -> Vec<u8> {
-    if v.len() == 0 { return vec![] };
+fn duplicates_removed(v: Level) -> Level {
+    if v.len() == 0 { return Level { faces: Vec::new() }; }
     // Optimization: Pre-allocate capacity
     let mut res = Vec::with_capacity(v.len());
-    res.push(v[0]);
+    res.push(v.get_unchecked(0));
     for i in 1..v.len() {
-        if v[i-1] != v[i] && v[i] != v[0] {
-            res.push(v[i]);
+        if v.get_unchecked((i-1) as u8) != v.get_unchecked(i as u8) && v.get_unchecked(i as u8) != v.get_unchecked(0u8) {
+            res.push(v.get_unchecked(i as u8));
         }
     }
-    res
+    Level { faces: res }
 }
 
 /// LAZY GAP ASSIGNMENTS
@@ -227,9 +224,10 @@ fn gap_assignments_lazy(
     GapAssignmentIterator::new(gaps_allowed, faces_to_place)
 }
 
-pub fn next_layers_lazy<'a>(last_layer: &'a Level, l: &'a Lattice, cyclic: bool) -> impl Iterator<Item = Vec<u8>> + 'a {
-
-    println!("Generating next layers for last layer: {:?}", last_layer.iter().map(|x| l.faces.get_unchecked(x as u8).label.clone()).collect::<Vec<_>>());
+pub fn next_layers_lazy<'a>(
+    last_layer: &'a Level,
+    l: &'a Lattice, cyclic: bool
+) -> impl Iterator<Item = Level> + 'a {
 
     let dim = l.faces.get_unchecked(last_layer.get_unchecked(0)).dim;
     let n = last_layer.len();
@@ -241,14 +239,9 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Level, l: &'a Lattice, cyclic: bool)
     };
 
     let bridges= (0..bridges_upper)
-        .map(|x| l.get_bridge_unchecked(last_layer[x], last_layer[(x+1) % n]))
-        .collect();
-
-    if !layer_ok(&bridges, cyclic) { 
-        return itertools::Either::Left(std::iter::empty()); 
-    };
-
-    println!("Bridges for next layer: {:?}", bridges.iter().map(|x| l.faces.get_unchecked(*x as u8).label.clone()).collect::<Vec<_>>());
+            .map(|x| l.get_bridge_unchecked(
+                last_layer.get_unchecked(x as u8), last_layer.get_unchecked(((x+1) % n) as u8)))
+            .collect::<Vec<u8>>();
 
     let mut faces_left = Vec::with_capacity(MAX_LEVELS);
     for x in l.levels.into_iter(dim+1) {
@@ -257,13 +250,10 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Level, l: &'a Lattice, cyclic: bool)
         }
     }
 
-    println!("Faces left for next layer: {:?}", faces_left.iter().map(|x| l.faces.get_unchecked(*x as u8).label.clone()).collect::<Vec<_>>());
-
-    // Optimization: Pre-allocate vector
     let mut gaps = Vec::with_capacity(n);
     for i in 0..n {
         let mut new_gap = Vec::with_capacity(MAX_UP_DOWN);
-        for x in l.faces.get_unchecked(last_layer[i]).upset.iter() {
+        for x in l.faces.get_unchecked(last_layer.get_unchecked(i as u8)).upset.iter() {
             if !bridges.contains(&x) {
                 new_gap.push(x);
             }
@@ -271,29 +261,27 @@ pub fn next_layers_lazy<'a>(last_layer: &'a Level, l: &'a Lattice, cyclic: bool)
         gaps.push(new_gap);
     }
 
-    let iter = gap_assignments_lazy(gaps, faces_left)
-        .map(move |x| combine_to_layer(&bridges, &x))
+    gap_assignments_lazy(gaps, faces_left)
+        .map(move |x| combine_to_level(&bridges, &x))
         .filter(move |x| layer_ok(x, cyclic))
-        .map(|x| duplicates_removed(x));
-
-    itertools::Either::Right(iter)
+        .map(|x| duplicates_removed(x))
 }
 
 // The main function replacing rhombic_strips_dfs_simple
 pub fn extensions_dfs_lazy(
-    strip: Vec<Vec<u8>>, 
+    strip: Levels, 
     l: &Lattice, 
     cyclic: bool,
-) -> Vec<Vec<Vec<u8>>> {
+) -> Vec<Levels> {
 
-    if l.faces.get_unchecked(*strip.last().unwrap().first().unwrap()).dim == l.dim {
+    if strip.len() == l.dim as usize {
         return vec![strip];
     }
 
     // Use par_bridge() to parallelize the consumption of the lazy iterator.
     // This allows us to process branches in parallel as they are generated,
     // without ever storing all possible next layers in memory at once.
-    next_layers_lazy(&strip[strip.len()-1], l, cyclic).par_bridge()
+    next_layers_lazy(&strip.get_unchecked((strip.len()-1) as u8), l, cyclic).par_bridge()
         .map(|next_layer| {
             let mut new_strip = strip.clone();
             new_strip.push(next_layer);
@@ -304,16 +292,16 @@ pub fn extensions_dfs_lazy(
 }
 
 pub fn find_first_rhombic_strip_lazy(
-    strip: Vec<Vec<u8>>, 
+    strip: Levels, 
     l: &Lattice, 
     cyclic: bool,
-) -> Option<Vec<Vec<u8>>> {
+) -> Option<Levels> {
 
-    if l.faces.get_unchecked(*strip.last().unwrap().first().unwrap()).dim == l.dim {
+    if strip.len() == l.dim as usize {
         return Some(strip);
     }
 
-    next_layers_lazy(&strip[strip.len()-1], l, cyclic).par_bridge()
+    next_layers_lazy(&strip.get_unchecked((strip.len()-1) as u8), l, cyclic).par_bridge()
         .filter_map(|next_layer| {
             let mut new_strip = strip.clone();
             new_strip.push(next_layer);
@@ -324,13 +312,13 @@ pub fn find_first_rhombic_strip_lazy(
 
 /// Optimized Existence Check using Lazy Generation + ParBridge
 pub fn strip_exists(
-    current_layer: &Vec<u8>, 
+    current_layer: &Level, 
     current_dim: usize, 
     l: &Lattice, 
     cyclic: bool
 ) -> bool {
 
-    if l.faces.get_unchecked(current_layer[0]).dim == l.dim {
+    if l.faces.get_unchecked(current_layer.get_unchecked(0)).dim == l.dim {
         return true; // Base case: Reached top dimension, strip exists
     }
 

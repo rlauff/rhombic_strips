@@ -45,7 +45,7 @@ pub struct LatticeApp {
     cyclic: bool,               // Toggle for cyclic vs linear strips
 
     // Visualization State
-    active_strip: Option<Vec<Vec<u8>>>,
+    active_strip: Option<Levels>,
     active_strip_edges: Option<Vec<(usize, usize)>>,
     
     num_strips_displayed: usize // track the number of strips displayed already
@@ -231,13 +231,13 @@ impl LatticeApp {
         dims
     }
 
-    fn apply_strip_layout(&mut self, strip: &Vec<Vec<u8>>) {
+    fn apply_strip_layout(&mut self, strip: &Levels) {
         let center = egui::pos2(500.0, 400.0);
 
-        for (layer_idx, layer) in strip.iter().enumerate() {
+        for (layer_idx, layer) in strip.levels.iter().enumerate() {
             let count = layer.len() as f32;
 
-            for (i, &face_idx) in layer.iter().enumerate() {
+            for (i, face_idx) in layer.iter().enumerate() {
                 if face_idx as usize >= self.nodes.len() { continue; }
 
                 let node_id = self.nodes[face_idx as usize].id;
@@ -572,7 +572,8 @@ impl eframe::App for LatticeApp {
                 self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let mut found = false;
                 for ham in lattice.ham_paths(self.cyclic) {
-                    if strip_exists(&ham, 0, &lattice, self.cyclic) {
+                    let level = Level::from_vec(ham);
+                    if strip_exists(&level, 0, &lattice, self.cyclic) {
                         self.msg_log = "Result: A rhombic strip EXISTS!".to_string();
                         found = true;
                         break;
@@ -590,7 +591,8 @@ impl eframe::App for LatticeApp {
                 self.num_strips_displayed = 0; // reset strip displayer count when generating new grid
                 let mut count = 0;
                 for ham in lattice.ham_paths(self.cyclic) {
-                    let new_strips = extensions_dfs_lazy(vec![ham], &lattice, self.cyclic);
+                    let levels = Levels::single_level_from_vec(ham);
+                    let new_strips = extensions_dfs_lazy(levels, &lattice, self.cyclic);
                     count += new_strips.len();
                 }
                 self.msg_log = format!("Number of rhombic strips found: {}", count);
@@ -612,7 +614,8 @@ impl eframe::App for LatticeApp {
                     // if we have not yet displayed a strip, we use the faster find_first function to display the first one
                     // after that, we will use the crude compute all method
                     if self.num_strips_displayed == 0 {
-                        if let Some(strip) = find_first_rhombic_strip_lazy(vec![ham], &lattice, self.cyclic) {
+                        let levels = Levels::single_level_from_vec(ham);
+                        if let Some(strip) = find_first_rhombic_strip_lazy(levels, &lattice, self.cyclic) {
                             found_strip = Some(strip);
                             self.num_strips_displayed += 1; // Increment for next time
                             break;
@@ -620,7 +623,8 @@ impl eframe::App for LatticeApp {
                             continue; // No strip for this ham, try next
                         }
                     }
-                    let strips = extensions_dfs_lazy(vec![ham], &lattice, self.cyclic);
+                    let levels = Levels::single_level_from_vec(ham);
+                    let strips = extensions_dfs_lazy(levels, &lattice, self.cyclic);
                     
                     if !strips.is_empty() {
                         if num_found + strips.len() >= num_needed {
@@ -636,8 +640,8 @@ impl eframe::App for LatticeApp {
                     self.msg_log = format!("Displaying found strip number {}.", self.num_strips_displayed);
                     self.apply_strip_layout(&strip);
 
-                    let strip_usize: Vec<Vec<usize>> = strip.iter()
-                        .map(|layer| layer.iter().map(|&x| x as usize).collect())
+                    let strip_usize: Vec<Vec<usize>> = strip.levels.iter()
+                        .map(|layer| layer.iter().map(|x| x as usize).collect())
                         .collect();
 
                     // cyclic edges not used atm, might draw them eventually somehow
@@ -674,7 +678,7 @@ impl eframe::App for LatticeApp {
             // 8. Export TeX
             if ui.button("Export TeX").clicked() {
                 let visible_node_ids: Vec<usize> = if let Some(strip) = &self.active_strip {
-                    strip.iter().flatten().map(|&x| {
+                    strip.levels.iter().flatten().map(|&x| {
                           if (x as usize) < self.nodes.len() { self.nodes[x as usize].id } else { usize::MAX }
                     }).collect()
                 } else {
@@ -831,7 +835,7 @@ impl eframe::App for LatticeApp {
 
             // Determine visible nodes and edges
             let visible_node_ids: Vec<usize> = if let Some(strip) = &self.active_strip {
-                strip.iter().flatten().map(|&x| {
+                strip.levels.iter().flatten().map(|&x| {
                       if (x as usize) < self.nodes.len() { self.nodes[x as usize].id } else { usize::MAX }
                 }).collect()
             } else {

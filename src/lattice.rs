@@ -17,14 +17,31 @@ use std::str;
 
 // unit types for stricter type checking
 
-#[derive(Copy, Clone, Debug)]
-pub struct Level{ faces: [u8; MAX_UP_DOWN] }
+#[derive(Clone, Debug)]
+pub struct Level{ pub faces: Vec<u8> }
 impl Level {
+    pub fn from_vec(vec: Vec<u8>) -> Self {
+        Level{ faces: vec }
+    }
     pub fn get_unchecked(&self, index: u8) -> u8 {
         self.faces[index as usize]
     }
     pub fn iter(&self) -> LevelIter<'_> {
         LevelIter::new(self)
+    }
+    pub fn len(&self) -> usize {
+        for i in 0..MAX_UP_DOWN {
+            if self.faces[i] == 255 {
+                return i;
+            }
+        }
+        MAX_UP_DOWN
+    }
+    pub fn is_empty(&self) -> bool {
+        self.faces.is_empty() 
+    }
+    pub fn contains(&self, value: &u8) -> bool {
+        self.faces.contains(value)
     }
 }
 
@@ -51,17 +68,22 @@ impl<'a> Iterator for LevelIter<'a> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct Levels{ levels: [Level; MAX_LEVELS] }
+#[derive(Clone, Debug)]
+pub struct Levels{ pub levels: Vec<Level> }
 impl Levels {
     pub fn new() -> Self {
-        Levels{ levels: [Level{ faces: [255u8; MAX_UP_DOWN] }; MAX_LEVELS] } // Initialize with 255 (empty indicator)
+        Levels{ levels: Vec::new() }
+    }
+    pub fn single_level_from_vec(vec: Vec<u8>) -> Self {
+        let mut levels = Levels::new();
+        levels.push(Level{ faces: vec });
+        levels
     }
     pub fn _get_index_unchecked(&self, i: u8, j: u8) -> u8 {
         self.levels[i as usize].faces[j as usize]
     }
-    pub fn _get_unchecked(&self, d: u8) -> &[u8; MAX_UP_DOWN] {
-        &self.levels[d as usize].faces
+    pub fn get_unchecked(&self, d: u8) -> &Level {
+        &self.levels[d as usize]
     }
     pub fn set_unchecked(&mut self, d: u8, value: u8) {
         // fill the first 255 by the given value
@@ -74,6 +96,12 @@ impl Levels {
     }
     pub fn into_iter(&self, d: u8) -> LevelIter<'_> {
         LevelIter::new(&self.levels[d as usize])
+    }
+    pub fn len(&self) -> usize {
+        self.levels.len()
+    }
+    pub fn push(&mut self, level: Level) {
+        self.levels.push(level);
     }
 }
 
