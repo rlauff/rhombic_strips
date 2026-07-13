@@ -539,7 +539,7 @@ canvas.addEventListener('pointerup', (e) => {
   drag = null;
   if (!wasClick) return;
 
-  if (d.kind === 'node') {
+if (d.kind === 'node') {
     // click-click relation building
     if (state.edgeStart == null) {
       state.edgeStart = d.id;
@@ -552,12 +552,19 @@ canvas.addEventListener('pointerup', (e) => {
     } else if (state.edgeStart === d.id) {
       cancelLink();
     } else {
+      // FIX: Cache the starting node ID before structuralChange() clears it
+      const startId = state.edgeStart; 
+      
       structuralChange();
-      const added = toggleEdge(state.edgeStart, d.id);
+      
+      // Use the cached startId
+      const added = toggleEdge(startId, d.id);
       const verb = added ? 'Added' : 'Removed';
       const kind = state.mode === 'poset' ? 'relation' : 'edge';
-      log(`${verb} ${kind} ${labelOf(state.edgeStart)} → ${labelOf(d.id)}.`);
-      state.edgeStart = null;
+      log(`${verb} ${kind} ${labelOf(startId)} → ${labelOf(d.id)}.`);
+      
+      // state.edgeStart is already null from structuralChange, but we keep this clean
+      state.edgeStart = null; 
       canvas.classList.remove('linking');
     }
   } else {
