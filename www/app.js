@@ -152,9 +152,19 @@ function undo() {
   refresh();
 }
 
-/// Any structural change invalidates running jobs and cached strips.
+function restartWorker() {
+  if (state.worker) {
+    state.worker.terminate(); // Instantly kills the thread & WASM memory
+  }
+  state.worker = new Worker(new URL('./worker.js', import.meta.url), {
+    type: 'module',
+  });
+  state.worker.onmessage = onWorkerMessage;
+}
+
 function invalidateResults() {
-  if (state.worker && state.job) state.worker.postMessage({ cmd: 'cancel' });
+  if (state.worker && state.job) restartWorker(); 
+  
   stopTicker();
   state.job = null;
   state.strips = [];
@@ -367,22 +377,41 @@ function render() {
     ctx.setLineDash([]);
   }
 
-  // pending relation preview
+// pending relation preview
   if (state.edgeStart != null && pointer.inside) {
     const na = nodeById(state.edgeStart);
     if (na) {
       const [ax, ay] = toScreen(na.x, na.y);
+      const bx = pointer.sx;
+      const by = pointer.sy;
+
       ctx.strokeStyle = SKY;
       ctx.lineWidth = 1.5;
+      
+      // Draw the dashed preview line
       ctx.setLineDash([5, 4]);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      ctx.lineTo(pointer.sx, pointer.sy);
+      ctx.lineTo(bx, by);
       ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.setLineDash([]); // Reset immediately for the arrow
+
+      // Draw the preview arrow
+      if (state.mode === 'poset') {
+        const mx = (ax + bx) / 2;
+        const my = (ay + by) / 2;
+        const angle = Math.atan2(by - ay, bx - ax);
+        const len = 8;
+        
+        ctx.beginPath();
+        ctx.moveTo(mx, my);
+        ctx.lineTo(mx - len * Math.cos(angle - Math.PI / 6), my - len * Math.sin(angle - Math.PI / 6));
+        ctx.moveTo(mx, my);
+        ctx.lineTo(mx - len * Math.cos(angle + Math.PI / 6), my - len * Math.sin(angle + Math.PI / 6));
+        ctx.stroke();
+      }
     }
   }
-
   // nodes
   const r = NODE_R * s;
   for (const n of state.nodes) {
@@ -441,13 +470,40 @@ function render() {
     }
   }
 
-  function line(na, nb) {
+function line(na, nb) {
     const [ax, ay] = toScreen(na.x, na.y);
     const [bx, by] = toScreen(nb.x, nb.y);
+    
+    // Draw the main line
     ctx.beginPath();
     ctx.moveTo(ax, ay);
     ctx.lineTo(bx, by);
     ctx.stroke();
+
+    // Draw the arrow chevron (only for directed posets)
+    if (state.mode === 'poset') {
+      const mx = (ax + bx) / 2;
+      const my = (ay + by) / 2;
+      const angle = Math.atan2(by - ay, bx - ax);
+      const len = 8; // Size of the arrowhead
+      
+      // Save dash state and enforce a solid stroke for the arrowhead
+      // (This prevents the arrow from looking broken if the edge is a dashed cyclic edge)
+      const dash = ctx.getLineDash();
+      ctx.setLineDash([]);
+      
+      ctx.beginPath();
+      // Draw top wing of the arrow
+      ctx.moveTo(mx, my);
+      ctx.lineTo(mx - len * Math.cos(angle - Math.PI / 6), my - len * Math.sin(angle - Math.PI / 6));
+      // Draw bottom wing of the arrow
+      ctx.moveTo(mx, my);
+      ctx.lineTo(mx - len * Math.cos(angle + Math.PI / 6), my - len * Math.sin(angle + Math.PI / 6));
+      ctx.stroke();
+      
+      // Restore the dash state
+      ctx.setLineDash(dash);
+    }
   }
 }
 
@@ -962,9 +1018,13 @@ function updateJobUi() {
   const row = $('job-row');
   if (!state.job) {
     row.hidden = true;
+    row.style.display = 'none'; // Force it to hide, overriding any CSS layout
     return;
   }
+  
   row.hidden = false;
+  row.style.display = ''; // Clear inline styles so your CSS can take over again
+  
   const j = state.job;
   const status =
     j.kind === 'count' ? `counted ${j.liveCount} …`
