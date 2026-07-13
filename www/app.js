@@ -753,7 +753,13 @@ $('mode-graph').addEventListener('click', () => { setMode('graph'); refresh(); }
 $('btn-add').addEventListener('click', () => {
   structuralChange();
   const [w, h] = canvasSize();
-  const [wx, wy] = toWorld(w / 2, h / 2);
+  let [wx, wy] = toWorld(w / 2, h / 2);
+
+  // FIX: If a node is already occupying this spot, nudge the new one to the right
+  while (state.nodes.some((n) => Math.abs(n.x - wx) < 10 && Math.abs(n.y - wy) < 10)) {
+    wx += 60; // Shift right by 60 world units
+  }
+
   const id = addNode($('label-input').value.trim(), wx, wy);
   $('label-input').value = '';
   log(`Added node ${labelOf(id)}.`);
