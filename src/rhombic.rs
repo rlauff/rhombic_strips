@@ -1,17 +1,44 @@
-use crate::lattice::*;
-use rayon::prelude::*;
-use std::iter::Iterator;
+//! Rhombic strips in graded posets.
+//!
+//! A strip is a sequence of layers, one per dimension level of the lattice,
+//! where layer `d+1` is obtained from layer `d` by inserting the bridges
+//! between consecutive faces and distributing the remaining faces of level
+//! `d+1` into the gaps.
+//!
+//! Entry points, all lazy where possible:
+//! * [`strips`] / [`strips_parallel`] — all strips of a lattice
+//! * [`count_strips`] — number of strips without storing them
+//! * [`strip_exists`] — existence check with early exit
+//! * [`extensions`] — all completions of a partial strip
+//! * [`next_layers`] — all valid successor layers of a single layer
 
-fn layer_ok(layer: &Vec<u8>, cyclic: bool) -> bool {
+use crate::lattice::{FaceId, Lattice};
+// rayon needs OS threads, which wasm32-unknown-unknown lacks. The parallel
+// entry points below are native-only; the browser uses the sequential
+// `strips` iterator (rayon-free) driven by web::StripEnumerator.
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
+
+/// One level of a strip: a sequence of face ids of equal dimension.
+pub type Layer = Vec<FaceId>;
+/// A strip: one layer per dimension, from dim 0 up.
+pub type Strip = Vec<Layer>;
+
+// ---------------------------------------------------------------------------
+// Layer predicates and assembly
+// ---------------------------------------------------------------------------
+
+/// A layer is ok if, after collapsing runs of equal faces into groups, no
+/// face appears in two different groups. In the cyclic case the sequence is
+/// read cyclically, so a wrap-around run counts as one group.
+fn layer_ok(layer: &[FaceId], cyclic: bool) -> bool {
     if layer.is_empty() {
         return true;
     }
-    if layer.iter().any(|&x| x == 255) {
-        return false; // Invalid bridge found, layer is not ok
-    }
+
     let mut groups = Vec::with_capacity(layer.len());
     groups.push(layer[0]);
-    for &val in layer.iter().skip(1) {
+    for &val in &layer[1..] {
         if val != *groups.last().unwrap() {
             groups.push(val);
         }
@@ -28,87 +55,84 @@ fn layer_ok(layer: &Vec<u8>, cyclic: bool) -> bool {
             }
         }
     }
-    
-
     true
 }
 
-fn combine_to_layer(bridges: &Vec<u8>, gaps: &Vec<Vec<u8>>) -> Vec<u8> {
-    // Optimization: Calculate exact size needed
-    let total_len = bridges.len() + gaps.iter().map(|g| g.len()).sum::<usize>();
+/// Interleave gap contents and bridges: g_0 b_0 g_1 b_1 ... (plus a trailing
+/// gap in the non-cyclic case, where there is one more gap than bridges).
+fn combine_to_layer(bridges: &[FaceId], gaps: &[Vec<FaceId>]) -> Layer {
+    let total_len = bridges.len() + gaps.iter().map(Vec::len).sum::<usize>();
     let mut layer = Vec::with_capacity(total_len);
 
-    for i in 0..bridges.len() {
-        // Gaps in lazy iterator come as Vec<usize>, simply push contents
-        // Optimization: Use extend_from_slice for bulk copy
+    for (i, &b) in bridges.iter().enumerate() {
         layer.extend_from_slice(&gaps[i]);
-        layer.push(bridges[i]);
+        layer.push(b);
     }
     if gaps.len() > bridges.len() {
-        // Optimization: Avoid clone(), use extend directly
-        layer.extend_from_slice(&gaps[gaps.len()-1]); 
+        layer.extend_from_slice(&gaps[gaps.len() - 1]);
     }
     layer
 }
 
-fn duplicates_removed(v: Vec<u8>) -> Vec<u8> {
-    if v.len() == 0 { return vec![] };
-    // Optimization: Pre-allocate capacity
+/// Collapse consecutive duplicates; additionally drop later occurrences of
+/// the first element (cyclic wrap-around duplicates).
+fn duplicates_removed(v: Layer) -> Layer {
+    if v.is_empty() {
+        return vec![];
+    }
     let mut res = Vec::with_capacity(v.len());
     res.push(v[0]);
     for i in 1..v.len() {
-        if v[i-1] != v[i] && v[i] != v[0] {
+        if v[i - 1] != v[i] && v[i] != v[0] {
             res.push(v[i]);
         }
     }
     res
 }
 
-/// LAZY GAP ASSIGNMENTS (OPTIMIZED)
-/// Instead of generating huge intermediate iterators via multi_cartesian_product,
-/// this uses an explicit iterative Depth-First Search (DFS) stack.
+// ---------------------------------------------------------------------------
+// Gap assignments: distribute faces into gaps, in all orders
+// ---------------------------------------------------------------------------
+
+/// Lazily enumerate all ways to distribute `faces_to_place` into the given
+/// gaps (each face only into gaps that allow it), including all orderings
+/// within a gap. Explicit DFS stack instead of a cartesian-product iterator,
+/// so only O(depth) state is kept.
 ///
-/// Logic:
-/// 1. Pre-calculate valid gaps for each face to speed up lookup.
-/// 2. Maintain a single mutable `buckets` state.
-/// 3. Push faces one by one. For each face, try inserting it into every valid gap
-///    at every possible position (slot).
-/// 4. Inserting at specific indices covers both "assignment" and "permutation".
+/// Invariants:
+/// * `stack[d] = (gap, slot)` is the placement of `faces_to_place[d]`.
+/// * `buckets` always reflects exactly the placements on the stack.
+/// * `search_cursor` is the next (gap, slot) to try at the current depth.
 pub struct GapAssignmentIterator {
-    // Static data
-    faces_to_place: Vec<u8>,
-    allowed_gaps_per_face: Vec<Vec<u8>>, // Pre-computed optimization
-    
-    // Dynamic state (DFS Stack)
-    // Stack stores the decision made at each depth: (gap_index, slot_index)
-    stack: Vec<(u8, u8)>,
-    
-    // The current state of assignments. We mutate this in-place.
-    buckets: Vec<Vec<u8>>,
-    
-    // Cursor to resume search after yielding or backtracking.
-    // Represents (next_gap_idx, next_slot_idx) to try for the current depth.
-    search_cursor: (u8, u8),
-    
-    // State flags
+    faces_to_place: Vec<FaceId>,
+    /// For each face (by position in `faces_to_place`): the gap indices that
+    /// allow it. Precomputed inversion of the `gaps_allowed` input.
+    allowed_gaps_per_face: Vec<Vec<usize>>,
+
+    stack: Vec<(usize, usize)>,
+    buckets: Vec<Vec<FaceId>>,
+    search_cursor: (usize, usize),
+
     is_done: bool,
-    has_yielded_initial: bool, // Handle case where faces_to_place is empty
+    has_yielded_initial: bool, // for the empty faces_to_place case
 }
 
 impl GapAssignmentIterator {
-    pub fn new(gaps_allowed: Vec<Vec<u8>>, faces_to_place: Vec<u8>) -> Self {
+    pub fn new(gaps_allowed: Vec<Vec<FaceId>>, faces_to_place: Vec<FaceId>) -> Self {
         let n_gaps = gaps_allowed.len();
-        
-        // Invert the mapping: For each face, which gap indices allow it?
-        // optimization: allows O(1) access during the tight inner loop
-        let allowed_gaps_per_face: Vec<Vec<u8>> = faces_to_place.iter().map(|&face| {
-            (0..n_gaps).filter(|&i| gaps_allowed[i].contains(&face)).map(|i| i as u8).collect()
-        }).collect();
+        let allowed_gaps_per_face = faces_to_place
+            .iter()
+            .map(|&face| {
+                (0..n_gaps)
+                    .filter(|&i| gaps_allowed[i].contains(&face))
+                    .collect()
+            })
+            .collect();
 
         Self {
             faces_to_place,
             allowed_gaps_per_face,
-            stack: Vec::with_capacity(n_gaps), // Reserve efficient capacity
+            stack: Vec::with_capacity(n_gaps),
             buckets: vec![vec![]; n_gaps],
             search_cursor: (0, 0),
             is_done: false,
@@ -118,10 +142,10 @@ impl GapAssignmentIterator {
 }
 
 impl Iterator for GapAssignmentIterator {
-    type Item = Vec<Vec<u8>>;
+    type Item = Vec<Vec<FaceId>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Handle edge case: No faces to place. Should yield one empty configuration.
+        // no faces: exactly one (empty) assignment
         if self.faces_to_place.is_empty() {
             if !self.has_yielded_initial {
                 self.has_yielded_initial = true;
@@ -129,7 +153,6 @@ impl Iterator for GapAssignmentIterator {
             }
             return None;
         }
-
         if self.is_done {
             return None;
         }
@@ -137,185 +160,222 @@ impl Iterator for GapAssignmentIterator {
         loop {
             let depth = self.stack.len();
 
-            // 1. Solution found?
-            // If stack depth matches number of faces, we have successfully placed everyone.
+            // 1. all faces placed: yield, then backtrack one step
             if depth == self.faces_to_place.len() {
-                // Snapshot the current valid state
                 let result = self.buckets.clone();
 
-                // Prepare for next iteration: Backtrack one step
-                // We pop the last move and advance the cursor to try the next option
                 let (last_gap, last_slot) = self.stack.pop().unwrap();
-                self.buckets[last_gap as usize].remove(last_slot as usize);
-                
-                // Resume search at the *next* slot after the one we just used
+                self.buckets[last_gap].remove(last_slot);
                 self.search_cursor = (last_gap, last_slot + 1);
 
                 return Some(result);
             }
 
-            // 2. Search for the next valid move for the current face
+            // 2. find the next valid move for the current face
             let face = self.faces_to_place[depth];
             let allowed_gaps = &self.allowed_gaps_per_face[depth];
             let mut found_move = false;
 
-            // Iterate through valid gaps starting from cursor position
-            // We use standard loop indices to avoid iterator allocation in tight loop
-            let start_gap_idx_in_allowed = allowed_gaps.iter()
+            let start = allowed_gaps
+                .iter()
                 .position(|&g| g >= self.search_cursor.0)
                 .unwrap_or(allowed_gaps.len());
 
-            for &gap_idx in &allowed_gaps[start_gap_idx_in_allowed..] {
-                let bucket_len = self.buckets[gap_idx as usize].len() as u8;
-                
-                // Determine starting slot. 
-                // If we are in the same gap as the cursor, respect the cursor slot.
-                // If we moved to a new gap, start at slot 0.
-                let start_slot = if gap_idx == self.search_cursor.0 { 
-                    self.search_cursor.1 
-                } else { 
-                    0 
+            for &gap_idx in &allowed_gaps[start..] {
+                let bucket_len = self.buckets[gap_idx].len();
+                // resume at the cursor slot in the cursor gap, else at slot 0
+                let start_slot = if gap_idx == self.search_cursor.0 {
+                    self.search_cursor.1
+                } else {
+                    0
                 };
 
-                // Try all insertion slots: 0 to len (inclusive for insert)
-                // Using a loop here instead of iterators allows early break
+                // insertion slots run from 0 to len inclusive
                 if start_slot <= bucket_len {
-                    // Valid move found!
-                    let slot_idx = start_slot; // Take the first available slot
-                    
-                    // Apply move
-                    self.buckets[gap_idx as usize].insert(slot_idx as usize, face);
-                    self.stack.push((gap_idx, slot_idx));
-
-                    // Reset cursor for the NEXT depth level (start fresh)
-                    self.search_cursor = (0, 0);
-                    
+                    self.buckets[gap_idx].insert(start_slot, face);
+                    self.stack.push((gap_idx, start_slot));
+                    self.search_cursor = (0, 0); // fresh cursor for next depth
                     found_move = true;
-                    break; 
+                    break;
                 }
             }
 
             if found_move {
-                // Continue loop to go deeper (depth + 1)
                 continue;
             }
 
-            // 3. No moves possible at this depth? Backtrack.
+            // 3. no move at this depth: backtrack
             if self.stack.is_empty() {
-                // We backtracked all the way to the top and found no more options.
                 self.is_done = true;
                 return None;
             }
-
             let (prev_gap, prev_slot) = self.stack.pop().unwrap();
-            // Undo the previous move
-            self.buckets[prev_gap as usize].remove(prev_slot as usize);
-            
-            // Set cursor to try the next possibility for the *previous* face
+            self.buckets[prev_gap].remove(prev_slot);
             self.search_cursor = (prev_gap, prev_slot + 1);
-            
-            // Loop continues with reduced depth
         }
     }
 }
 
-// Wrapper function to maintain your API signature
-fn gap_assignments_lazy(
-    gaps_allowed: Vec<Vec<u8>>, 
-    faces_to_place: Vec<u8>
-) -> impl Iterator<Item = Vec<Vec<u8>>> {
-    GapAssignmentIterator::new(gaps_allowed, faces_to_place)
-}
+// ---------------------------------------------------------------------------
+// Layer successors
+// ---------------------------------------------------------------------------
 
-pub fn next_layers_lazy<'a>(last_layer: &'a Vec<u8>, l: &'a Lattice, cyclic: bool) -> impl Iterator<Item = Vec<u8>> + 'a {
+/// Lazily enumerate all valid layers of dimension `d+1` following the given
+/// layer of dimension `d`. The returned iterator owns all its data.
+pub fn next_layers(
+    last_layer: &[FaceId],
+    l: &Lattice,
+    cyclic: bool,
+) -> impl Iterator<Item = Layer> + Send {
+    debug_assert!(!last_layer.is_empty(), "next_layers: empty layer");
 
-    let dim = l.faces[last_layer[0] as usize].dim;
+    let dim = l.face(last_layer[0]).dim();
     let n = last_layer.len();
-    let bridges_upper = match (cyclic, n) {
-        (true, 1) => 0, // No bridges needed for a single face in cyclic case
-        (true, 2) => 1, // only one bridge needed since it connects back to itself
-        (true, _) => n, // Cyclic case has as many bridges as faces
-        (false, _) => n - 1, // Linear case has one less bridge than faces
+    let num_bridges = match (cyclic, n) {
+        (true, 1) => 0,     // single face: nothing to bridge
+        (true, 2) => 1,     // the one bridge already closes the cycle
+        (true, _) => n,     // cyclic: as many bridges as faces
+        (false, _) => n - 1, // linear: one less
     };
 
-    let bridges: Vec<_> = (0..bridges_upper)
-        .map(|x| l.bridges[last_layer[x] as usize][last_layer[(x+1) % n] as usize])
+    // bridges between consecutive layer faces; all must exist
+    let bridges: Option<Vec<FaceId>> = (0..num_bridges)
+        .map(|x| l.bridge(last_layer[x], last_layer[(x + 1) % n]))
         .collect();
 
-    if !layer_ok(&bridges, cyclic) { 
-        return itertools::Either::Left(std::iter::empty()); 
-    };   
+    let bridges = match bridges {
+        Some(b) if layer_ok(&b, cyclic) => b,
+        _ => return itertools::Either::Left(std::iter::empty()),
+    };
 
-    let mut faces_left = Vec::with_capacity(l.levels[dim as usize +1].len());
-    for x in l.levels[dim as usize +1].iter().filter(|&&x| x != 255) {
-        if !bridges.contains(&x) {
-            faces_left.push(*x);
-        }
+    // membership mask for the bridges (avoids repeated linear scans)
+    let mut is_bridge = vec![false; l.num_faces()];
+    for &b in &bridges {
+        is_bridge[b] = true;
     }
 
-    // Optimization: Pre-allocate vector
-    let mut gaps = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut new_gap = Vec::with_capacity(l.faces[last_layer[i] as usize].upset.len());
-        for x in l.faces[last_layer[i] as usize].upset.iter() {
-            if !bridges.contains(x) {
-                new_gap.push(*x);
-            }
-        }
-        gaps.push(new_gap);
-    }
+    // faces of level d+1 that are not bridges must be placed into gaps
+    let faces_left: Vec<FaceId> = l
+        .level(dim + 1)
+        .iter()
+        .copied()
+        .filter(|&x| !is_bridge[x])
+        .collect();
 
-    let iter = gap_assignments_lazy(gaps, faces_left)
-        .map(move |x| combine_to_layer(&bridges, &x))
-        .filter(move |x| layer_ok(x, cyclic))
-        .map(|x| duplicates_removed(x));
+    // gap i may contain any non-bridge face covering last_layer[i]
+    let gaps: Vec<Vec<FaceId>> = last_layer
+        .iter()
+        .map(|&f| {
+            l.face(f)
+                .upset()
+                .iter()
+                .copied()
+                .filter(|&x| !is_bridge[x])
+                .collect()
+        })
+        .collect();
+
+    let iter = GapAssignmentIterator::new(gaps, faces_left)
+        .map(move |assignment| combine_to_layer(&bridges, &assignment))
+        .filter(move |layer| layer_ok(layer, cyclic))
+        .map(duplicates_removed);
 
     itertools::Either::Right(iter)
 }
 
-// The main function replacing rhombic_strips_dfs_simple
-pub fn rhombic_strips_dfs_lazy(
-    strip: Vec<Vec<u8>>, 
-    l: &Lattice, 
-    max_dim: usize, 
-    cyclic: bool
-) -> Vec<Vec<Vec<u8>>> {
+// ---------------------------------------------------------------------------
+// Strips
+// ---------------------------------------------------------------------------
 
-    // Base case: if we reached the max dimension, return the current strip
-    if max_dim == strip.len() - 1 {
-        return vec![strip];
+/// Lazily enumerate all completions of a partial strip up to dimension
+/// `max_dim`. The strip must be non-empty; its last layer is extended.
+pub fn extensions<'a>(
+    strip: Strip,
+    l: &'a Lattice,
+    max_dim: usize,
+    cyclic: bool,
+) -> Box<dyn Iterator<Item = Strip> + Send + 'a> {
+    if strip.len() == max_dim + 1 {
+        return Box::new(std::iter::once(strip));
     }
+    let last = strip.last().expect("extensions: empty strip").clone();
+    Box::new(next_layers(&last, l, cyclic).flat_map(move |layer| {
+        let mut extended = strip.clone();
+        extended.push(layer);
+        extensions(extended, l, max_dim, cyclic)
+    }))
+}
 
-    // Use par_bridge() to parallelize the consumption of the lazy iterator.
-    // This allows us to process branches in parallel as they are generated,
-    // without ever storing all possible next layers in memory at once.
-    next_layers_lazy(&strip[strip.len()-1], l, cyclic).par_bridge()
-        .map(|next_layer| {
-            let mut new_strip = strip.clone();
-            new_strip.push(next_layer);
-            rhombic_strips_dfs_lazy(new_strip, l, max_dim, cyclic)
+/// Lazily enumerate all rhombic strips of the lattice, from dimension 0 up to
+/// `l.dim()`. Sequential; supports early exit (`.next()`, `.take(k)`, ...).
+pub fn strips(l: &Lattice, cyclic: bool) -> impl Iterator<Item = Strip> + '_ {
+    let max_dim = l.dim();
+    l.ham_paths(cyclic)
+        .flat_map(move |path| extensions(vec![path], l, max_dim, cyclic))
+}
+
+/// All rhombic strips of the lattice, computed in parallel.
+///
+/// Parallelises over the top of the search tree (hamiltonian paths and their
+/// first extension layers); each branch is then explored sequentially. This
+/// avoids the per-level `par_bridge` overhead of spawning tasks for every
+/// node of the search tree.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn strips_parallel(l: &Lattice, cyclic: bool) -> Vec<Strip> {
+    let max_dim = l.dim();
+    if max_dim == 0 {
+        return l.ham_paths(cyclic).map(|p| vec![p]).collect();
+    }
+    l.ham_paths(cyclic)
+        .par_bridge()
+        .flat_map_iter(|path| {
+            let strip = vec![path];
+            extensions(strip, l, max_dim, cyclic)
         })
-        .flatten()
         .collect()
 }
 
-/// Optimized Existence Check using Lazy Generation + ParBridge
-pub fn rhombic_strip_exists(
-    current_layer: &Vec<u8>, 
-    current_dim: usize, 
-    l: &Lattice, 
-    max_dim: usize, 
-    cyclic: bool
-) -> bool {
+/// Count all rhombic strips without storing them.
+///
+/// Native-only (parallel). In the browser, `web::StripEnumerator` counts by
+/// draining the sequential [`strips`] iterator, so it needs no rayon.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn count_strips(l: &Lattice, cyclic: bool) -> usize {
+    let max_dim = l.dim();
+    if max_dim == 0 {
+        return l.ham_paths(cyclic).count();
+    }
+    l.ham_paths(cyclic)
+        .par_bridge()
+        .map(|path| extensions(vec![path], l, max_dim, cyclic).count())
+        .sum()
+}
 
+/// Does the given layer of dimension `current_dim` extend to a full strip up
+/// to `max_dim`? Sequential with early exit.
+pub fn layer_extends(
+    layer: &[FaceId],
+    current_dim: usize,
+    l: &Lattice,
+    max_dim: usize,
+    cyclic: bool,
+) -> bool {
     if current_dim == max_dim {
         return true;
     }
+    next_layers(layer, l, cyclic)
+        .any(|next| layer_extends(&next, current_dim + 1, l, max_dim, cyclic))
+}
 
-    let next_iter = next_layers_lazy(current_layer, l, cyclic);
-    // par_bridge converts the sequential iterator into a parallel one.
-    // It pulls items from the iterator on one thread and distributes processing to others.
-    next_iter.par_bridge().any(|next_layer| {
-        rhombic_strip_exists(&next_layer, current_dim + 1, l, max_dim, cyclic)
-    })
+/// Does the lattice admit a rhombic strip at all? Parallel over the
+/// hamiltonian paths of level 0, early exit as soon as one is found.
+///
+/// Native-only (parallel). In the browser, `web::StripEnumerator` in "exists"
+/// mode pulls a single item from the sequential [`strips`] iterator instead.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn strip_exists(l: &Lattice, cyclic: bool) -> bool {
+    let max_dim = l.dim();
+    l.ham_paths(cyclic)
+        .par_bridge()
+        .any(|path| layer_extends(&path, 0, l, max_dim, cyclic))
 }

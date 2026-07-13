@@ -1,0 +1,32 @@
+//! Rhombic strips of graded posets — library crate.
+//!
+//! This is the shared core behind three front ends:
+//!
+//! * the command-line tool (`src/main.rs`),
+//! * the desktop egui explorer ([`gui`], native only), and
+//! * the browser build ([`web`], compiled to wasm for `www/`).
+//!
+//! The generator and strip-search logic that the website needs lives in
+//! [`web::api`] as plain `Result<String, String>` functions, so it is unit
+//! tested on the host (see `tests/generators.rs`) without a browser in the
+//! loop. The `#[wasm_bindgen]` layer in [`web`] is a thin shell over it.
+
+pub mod lattice;
+pub mod rhombic;
+
+/// TikZ/pdflatex rendering plus `edges_strip` (the strip's draw edges, used by
+/// both the GUI and the browser). Compiled on every target: `edges_strip` is
+/// pure, and the `std::process`/`std::fs` rendering paths compile for wasm too
+/// (they're simply never called in the browser). If your `plotting.rs` pulls in
+/// a *native-only crate* at module level and fails to compile for wasm, gate
+/// those items with `#[cfg(not(target_arch = "wasm32"))]` and keep `edges_strip`
+/// ungated.
+pub mod plotting;
+
+/// Desktop egui explorer. It pulls in `eframe` and spawns worker threads, so
+/// it is excluded from the wasm build (the browser gets [`web`] instead).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gui;
+
+/// Browser bindings plus the host-testable [`web::api`] core.
+pub mod web;

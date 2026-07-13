@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rhombic Strips — Interactive</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@1,500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wordmark">
+    <svg class="strip-glyph" viewBox="0 0 64 20" aria-hidden="true">
+      <g fill="none" stroke-width="1.6" stroke-linejoin="round">
+        <path stroke="#0072B2" d="M4 10 L11 3 L18 10 L11 17 Z"/>
+        <path stroke="#E66100" d="M18 10 L25 3 L32 10 L25 17 Z"/>
+        <path stroke="#009E73" d="M32 10 L39 3 L46 10 L39 17 Z"/>
+        <path stroke="#CC79A7" d="M46 10 L53 3 L60 10 L53 17 Z"/>
+      </g>
+    </svg>
+    <h1>Rhombic&nbsp;Strips</h1>
+    <span class="sub">graded posets &amp; face lattices</span>
+  </div>
+  <div class="topbar-right">
+    <div class="mode-switch" role="tablist" aria-label="Editor mode">
+      <button id="mode-poset" class="active" role="tab" aria-selected="true">Poset</button>
+      <button id="mode-graph" role="tab" aria-selected="false">Graph</button>
+    </div>
+    <span id="stats" class="stats">0 nodes · 0 relations</span>
+  </div>
+</header>
+
+<div class="frame">
+<aside class="panel" id="panel">
+
+  <section>
+    <h2>Edit</h2>
+    <div class="row">
+      <input id="label-input" type="text" placeholder="Label (empty = numbered)" spellcheck="false">
+      <button id="btn-add">Add node</button>
+    </div>
+    <div class="row wrap">
+      <button id="btn-arrange">Arrange by rank</button>
+      <button id="btn-fit">Fit view</button>
+      <button id="btn-undo">Undo</button>
+      <button id="btn-clear" class="danger">Clear</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Examples</h2>
+    <div class="row">
+      <label class="inline" for="example-n">n</label>
+      <input id="example-n" type="number" min="1" max="12" value="3">
+    </div>
+    <p class="group-label">Face lattices</p>
+    <div class="row wrap">
+      <button data-gen="cube">n-cube</button>
+      <button data-gen="simplex">n-simplex</button>
+    </div>
+    <div class="row wrap">
+      <button data-assoc="complete">Permutahedron</button>
+      <button data-assoc="path">Associahedron</button>
+      <button data-assoc="cycle">Cyclohedron</button>
+      <button data-assoc="star">Stellahedron</button>
+    </div>
+    <p class="group-label">Graphs <span class="dim">(opens the graph editor)</span></p>
+    <div class="row wrap">
+      <button data-graph="path">Path</button>
+      <button data-graph="cycle">Cycle</button>
+      <button data-graph="complete">Complete</button>
+      <button data-graph="star">Star</button>
+    </div>
+  </section>
+
+  <section data-mode="graph" hidden>
+    <h2>Graph associahedra</h2>
+    <button id="btn-tube-poset" class="block" title="Connected subsets of the drawn graph, ordered by inclusion">Tube poset (inclusion)</button>
+    <button id="btn-graph-assoc" class="block" title="Face lattice of the graph associahedron: tubings under reverse inclusion">Graph associahedron (tubings)</button>
+  </section>
+
+  <section data-mode="poset">
+    <h2>Poset generators</h2>
+    <div class="row">
+      <input id="grid-input" type="text" placeholder="Chains, e.g. 211 or 12,3" spellcheck="false">
+      <button id="btn-grid">Grid</button>
+    </div>
+    <div class="row wrap">
+      <button id="btn-distributive" title="Distributive lattice of order ideals">J(P)</button>
+      <button id="btn-infer" title="Infer covers from all-digit labels">Infer digit relations</button>
+    </div>
+  </section>
+
+  <section data-mode="poset">
+    <h2>File</h2>
+    <div class="row wrap">
+      <button id="btn-load">Load lattice…</button>
+      <button id="btn-save">Save lattice</button>
+      <button id="btn-tikz">Export TikZ</button>
+    </div>
+    <input id="file-input" type="file" accept=".txt,.lat,text/plain" hidden>
+  </section>
+
+  <section data-mode="poset">
+    <h2>Rhombic strips</h2>
+    <label class="check"><input id="cyclic" type="checkbox"> Cyclic strips</label>
+    <div class="row wrap">
+      <button id="btn-exists">Existence</button>
+      <button id="btn-count">Count</button>
+      <button id="btn-enumerate">Enumerate</button>
+    </div>
+    <div id="job-row" class="job" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span id="job-status">searching…</span>
+      <button id="btn-cancel" class="danger small">Cancel</button>
+    </div>
+
+    <div id="strip-nav" hidden>
+      <p id="strip-counter" class="group-label">Strip 1 of 1</p>
+      <div class="row wrap">
+        <button id="btn-prev">◀ Prev</button>
+        <button id="btn-next">Next ▶</button>
+        <button id="btn-arrange-strip">Arrange</button>
+        <button id="btn-toggle-strip">Hide</button>
+      </div>
+      <details id="layers-box">
+        <summary>Strip layers</summary>
+        <ol id="layers-list" reversed></ol>
+        <button id="btn-copy-layers" class="small">Copy layers</button>
+      </details>
+    </div>
+  </section>
+
+  <div class="panel-foot">
+    <p id="log" class="log" role="status">Loading WebAssembly module…</p>
+    <details>
+      <summary>Controls</summary>
+      <ul class="hints">
+        <li>Double-click canvas — add node</li>
+        <li>Double-click node — rename it</li>
+        <li>Click node, then another — toggle relation/edge</li>
+        <li>Right-click node — delete it</li>
+        <li>Esc — cancel relation · Ctrl+Z — undo</li>
+        <li>Drag node — move · drag canvas — pan · wheel — zoom</li>
+      </ul>
+    </details>
+  </div>
+</aside>
+
+<main class="stage">
+  <canvas id="canvas"></canvas>
+  <input id="rename-input" type="text" hidden spellcheck="false" aria-label="Rename node">
+  <div class="zoombox">
+    <button id="zoom-in" aria-label="Zoom in">+</button>
+    <button id="zoom-out" aria-label="Zoom out">−</button>
+  </div>
+</main>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

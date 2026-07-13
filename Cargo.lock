@@ -2485,7 +2485,11 @@ dependencies = [
  "eframe",
  "egui",
  "itertools",
+ "js-sys",
  "rayon",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

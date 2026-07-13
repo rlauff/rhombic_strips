@@ -1,72 +1,104 @@
+use rhombic_strips::{gui, lattice, plotting, rhombic};
 
-mod lattice;
-use crate::lattice::*;
-mod rhombic;
-use crate::rhombic::*;
-mod gui;
-use crate::gui::*;
-mod plotting;
-use crate::plotting::*;
-
-pub const MAX_FACES: usize = 500; // maximum number of faces in the lattice, used for fixed-size arrays
-pub const MAX_UP_DOWN: usize = 100; // maximum number of faces in the upset/downset of a face, used for fixed-size arrays
-pub const MAX_LEVELS: usize = 100; // maximum number of levels in the lattice, used for fixed-size arrays
-
+use crate::lattice::Lattice;
+use crate::rhombic::{count_strips, extensions, strip_exists, strips};
 
 fn main() {
-    // read in source
-    let source = std::env::args().nth(1)
-        .expect("Please provide a file from which to read in the lattice.");
-    // check for flags
-    let cyclic = std::env::args().any(|arg| arg == "--cyclic"); // restrict to cyclic rhombic strips
-    let count = std::env::args().any(|arg| arg == "--count");   // find all rhombic strips and print their number
-    let show = std::env::args().any(|arg| arg == "--show");     // print out the found strips (only first one)
-    let enumerate = std::env::args().any(|arg| arg == "--enumerate");   // find all and split the amount among the hamilton cycles
-    let show_all = std::env::args().any(|arg| arg == "--show-all"); // show all found strips
-    let show_cyclic = std::env::args().any(|arg| arg == "--show-cyclic"); // show all strips in cyclic layout
-    let interactive_mode = std::env::args().any(|arg| arg == "--interactive"); // interactive mode with GUI, only shows the first found strip, but allows to interactively explore it and the lattice
-
+    let interactive_mode = std::env::args().any(|arg| arg == "--interactive");
     if interactive_mode {
-        interactive();
+        gui::interactive();
         return;
     }
 
-    process_lattice(source, cyclic, count, show, enumerate, show_all, show_cyclic);
+    let source = std::env::args()
+        .nth(1)
+        .expect("Please provide a file from which to read in the lattice.");
+
+    let cyclic = std::env::args().any(|arg| arg == "--cyclic"); // restrict to cyclic rhombic strips
+    let count = std::env::args().any(|arg| arg == "--count"); // find all rhombic strips and print their number
+    let show = std::env::args().any(|arg| arg == "--show"); // render the first found strip
+    let enumerate = std::env::args().any(|arg| arg == "--enumerate"); // split the count among the hamilton paths/cycles
+    let show_all = std::env::args().any(|arg| arg == "--show-all"); // render all found strips
+    let show_cyclic = std::env::args().any(|arg| arg == "--show-cyclic"); // render in cyclic layout
+
+    process_lattice(
+        &source,
+        cyclic,
+        count,
+        show,
+        enumerate,
+        show_all,
+        show_cyclic,
+    );
 }
 
-fn process_lattice(source: String, cyclic: bool, count: bool, show: bool, enumerate: bool, show_all: bool, show_cyclic: bool) {
-    let l = lattice_from_file(&source);
+fn process_lattice(
+    source: &str,
+    cyclic: bool,
+    count: bool,
+    show: bool,
+    enumerate: bool,
+    show_all: bool,
+    show_cyclic: bool,
+) {
+    let l = match Lattice::from_file(source) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    };
 
-    let mut number_found = 0;
-    for ham in l.ham_paths(cyclic) {
-        if !count && !enumerate && !show && !show_cyclic {
-            if rhombic_strip_exists(&ham.clone(), 0, &l, l.dim.clone() as usize, cyclic) {
-                println!("A rhombic strip was found");
-                number_found = 1;
+    let labels = |layer: &[lattice::FaceId]| -> Vec<String> {
+        layer
+            .iter()
+            .map(|&x| l.face(x).label().to_string())
+            .collect()
+    };
+
+    if enumerate {
+        // split the total count among the hamilton paths/cycles of level 0
+        let mut total = 0;
+        for ham in l.ham_paths(cyclic) {
+            let n = extensions(vec![ham.clone()], &l, l.dim(), cyclic).count();
+            println!("{:?}: {}", labels(&ham), n);
+            total += n;
+        }
+        println!("Number of rhombic strips found: {}", total);
+        return;
+    }
+
+    if count {
+        println!(
+            "Number of rhombic strips found: {}",
+            count_strips(&l, cyclic)
+        );
+        return;
+    }
+
+    if show || show_cyclic || show_all {
+        let mut found = 0;
+        for strip in strips(&l, cyclic) {
+            plotting::show_strip(&strip, &l, show_cyclic);
+            for layer in &strip {
+                println!("{:?}", labels(layer));
+            }
+            found += 1;
+            if !show_all {
                 break;
             }
-        } else {
-            let new = rhombic_strips_dfs_lazy(vec![ham.clone()], &l, l.dim.clone() as usize, cyclic);
-            number_found += new.len();
-            if enumerate {
-                println!("{:?}: {}", ham.iter().map(|x| l.faces[*x as usize].label.clone()).collect::<Vec<_>>(), new.len());
-            }
-            if show || show_cyclic {
-                for strip in new.iter() {
-                    show_strip(strip, &l, show_cyclic);
-                    for layer in strip.iter() {
-                        println!("{:?}", layer.iter().map(|x| l.faces[*x as usize].label.clone()).collect::<Vec<_>>());
-                    }
-                    if !show_all { break; };
-                }
-            }
-            if !count && !enumerate && new.len() > 0 { break };
+            println!();
         }
+        if found == 0 {
+            println!("No rhombic strip exists!");
+        }
+        return;
     }
-    if count || enumerate {
-        println!("Number of rhombic strips found: {}", number_found);
-    }
-    if !count && !enumerate && number_found == 0 {
+
+    // default: existence check with early exit
+    if strip_exists(&l, cyclic) {
+        println!("A rhombic strip was found");
+    } else {
         println!("No rhombic strip exists!");
     }
 }

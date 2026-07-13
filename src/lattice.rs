@@ -1,206 +1,227 @@
-use crate::MAX_FACES;
-use crate::MAX_UP_DOWN;
-use crate::MAX_LEVELS;
+//! Face lattices of graded posets.
+//!
+//! Faces live in the `Lattice`, which acts as an arena; upsets, downsets,
+//! levels and bridges are stored as indices (`FaceId`) into that arena.
+//! A `Face` on its own is therefore meaningless.
+//!
+//! All internals are private. Access goes through the getter methods on
+//! `Lattice` and `Face`, so the representation (flat bridge matrix,
+//! per-level index lists, ...) can change without touching client code.
 
-//faces are contained in the face lattice which acts as an arena. The upset etc are saved as a list of indices to the faces in this arena.
-//a face object alone hence makes no sense
-
+use std::fmt;
 use std::fs::read_to_string;
-use std::str;
 
-#[derive(Debug)]
+/// Index of a face in the arena of its `Lattice`.
+pub type FaceId = usize;
+
+// ---------------------------------------------------------------------------
+// Face
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
 pub struct Face {
-    pub label: String,
-    pub dim: u8,
-    pub upset: [u8; MAX_UP_DOWN],        // fixed size arrays for better caching. 255 indicates empty
-    pub downset: [u8; MAX_UP_DOWN],
+    label: String,
+    dim: usize,
+    upset: Vec<FaceId>,   // faces covering this one
+    downset: Vec<FaceId>, // faces covered by this one
 }
 
-#[derive(Debug)]
+impl Face {
+    pub fn new(label: String, dim: usize, upset: Vec<FaceId>, downset: Vec<FaceId>) -> Self {
+        Face { label, dim, upset, downset }
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Faces covering this face (indices into the lattice arena).
+    pub fn upset(&self) -> &[FaceId] {
+        &self.upset
+    }
+
+    /// Faces covered by this face (indices into the lattice arena).
+    pub fn downset(&self) -> &[FaceId] {
+        &self.downset
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lattice
+// ---------------------------------------------------------------------------
+
 pub struct Lattice {
-    pub faces: Vec<Face>,
-    pub levels: [[u8; MAX_UP_DOWN]; MAX_LEVELS], // fixed size arrays for better caching. 255 indicates empty
-    pub bridges: [[u8; MAX_FACES]; MAX_FACES], // max number of faces is 100, so we can store the bridges in a 100x100 array. 255 indicates no bridge, otherwise the value is the index of the bridge face
-    pub dim: u8,
-    // pub ham: Vec<Vec<u8>>, // to be exchanged for a impl iter that generates the hamilton paths on the fly, since storing them can be very memory intensive for large lattices
+    faces: Vec<Face>,
+    /// `levels[d]` lists the ids of all faces of dimension `d`.
+    levels: Vec<Vec<FaceId>>,
+    /// Flat `n x n` matrix; `bridges[i * n + j]` is the common cover of
+    /// faces `i` and `j`, if any. Symmetric.
+    bridges: Vec<Option<FaceId>>,
+    dim: usize,
 }
 
-//bridges are precomputed and stored in the face lattice object. Note that the keys of the bridges HashMap are the edges of the graphs on this levels
-
-fn bridge(faces: &Vec<Face>, f1: u8, f2: u8) -> Option<u8> {
-    for (i, face) in faces.iter().enumerate() {
-        if face.downset.contains(&f1) && face.downset.contains(&f2) {
-            return Some(i as u8);
-        }
+impl fmt::Debug for Lattice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Lattice")
+            .field("num_faces", &self.faces.len())
+            .field("dim", &self.dim)
+            .field("levels", &self.levels)
+            .finish()
     }
-    None
-}
-
-pub fn lattice_from_file(file: &str) -> Lattice {
-    // read and store faces as in the file
-    let mut faces: Vec<Face> = vec![];
-    
-    // We expect the file to exist at the path provided
-    let content = read_to_string(file).expect("reading file failed");
-
-    for face_str in content.lines() {
-        // skip empty lines
-        if face_str.trim().is_empty() { continue; }
-
-        // Split the line into parts: Dim, Label, and the Sets
-        // Example Line: "0: 000: {16, 10, 8}, {}"
-        // We limit the split to 3 parts to keep the sets string intact
-        let parts: Vec<&str> = face_str.splitn(3, ": ").collect();
-        
-        // Safety check to ensure the line format is correct
-        if parts.len() < 3 { continue; } 
-
-        // dimension
-        let dim = parts[0].trim().parse::<u8>().expect("something was not an integer");
-        let label = parts[1].trim().to_string();
-
-        // The third part contains the sets string: "{...}, {...}"
-        let sets_part = parts[2];
-
-        // We split upset and downset using the separator "}, {"
-        // This is more robust than fixed indices.
-        let set_strings: Vec<&str> = sets_part.split("}, {").collect();
-        if set_strings.len() < 2 { 
-            panic!("reading of a face failed, check lattice file sets format"); 
-        }
-
-        // upset
-        // Remove the leading '{' and any surrounding whitespace
-        let upset_clean = set_strings[0].trim_start_matches('{').trim();
-        let mut upset = [255u8; MAX_UP_DOWN]; // Initialize with 255 (empty indicator)
-        let mut upset_count = 0;     // Counter to act as a stack pointer
-
-        if !upset_clean.is_empty() {
-            for face_index_str in upset_clean.split(',') {
-                let trimmed = face_index_str.trim();
-                if trimmed.is_empty() { continue; }
-
-                let val = trimmed.parse::<usize>().expect("something was not an integer");
-                
-                // Logic fix: "push" the value into the next available slot
-                if upset_count < MAX_UP_DOWN {
-                    upset[upset_count] = val as u8; 
-                    upset_count += 1;
-                } else {
-                    panic!("Upset count exceeds maximum allowed size of {}", MAX_UP_DOWN);
-                }
-            }
-        }
-
-        // downset
-        // Remove the trailing '}' and any surrounding whitespace
-        let downset_clean = set_strings[1].trim_end_matches('}').trim();
-        let mut downset = [255u8; MAX_UP_DOWN]; // Initialize with 255 (empty indicator)
-        let mut downset_count = 0;     // Counter to act as a stack pointer
-
-        if !downset_clean.is_empty() {
-            for face_index_str in downset_clean.split(',') {
-                let trimmed = face_index_str.trim();
-                if trimmed.is_empty() { continue; }
-
-                let val = trimmed.parse::<usize>().expect("something was not an integer");
-
-                // Logic fix: "push" the value into the next available slot
-                if downset_count < MAX_UP_DOWN {
-                    downset[downset_count] = val as u8;
-                    downset_count += 1;
-                } else {
-                    panic!("Downset count exceeds maximum allowed size of {}", MAX_UP_DOWN);
-                }
-            }
-        }
-
-        faces.push(
-            Face {
-                label: label,
-                dim: dim,
-                upset: upset,
-                downset: downset,
-            }
-        );
-    }
-
-    // make levels
-    let max_dim = faces.iter().map(|x| x.dim).max().unwrap_or(0);
-    let mut levels = [[255u8; MAX_UP_DOWN]; MAX_LEVELS]; // Initialize with 255 (empty indicator)
-    let mut count_per_dim = [0u8; MAX_LEVELS]; // To keep track of how many faces we have added to each dimension level
-    
-    for (i, face) in faces.iter().enumerate() {
-        let d = face.dim as usize;
-        // Check bounds to prevent panics
-        if d < MAX_LEVELS && (count_per_dim[d] as usize) < MAX_UP_DOWN {
-             levels[d][count_per_dim[d] as usize] = i as u8; // Store the index directly
-             count_per_dim[d] += 1;
-        }
-    }
-
-    // generate and store bridges
-    let mut bridges = [[255u8; MAX_FACES]; MAX_FACES]; // Initialize with 255 (no bridge indicator)
-    for i in 0..faces.len() {
-        for j in 0..faces.len() {
-            if i >= j { continue };
-            
-            // Check if a bridge exists between face i and face j
-            if let Some(b) = bridge(&faces, i as u8, j as u8) {
-                // Bounds check for the 2D array
-                if i < MAX_FACES && j < MAX_FACES {
-                    bridges[i][j] = b;
-                    bridges[j][i] = b;
-                }
-            }
-        }
-    }
-
-    let l = Lattice {
-        faces: faces,
-        levels: levels,
-        bridges: bridges,
-        dim: max_dim,
-    };
-    l
 }
 
 impl Lattice {
-    // Create an iterator that generates hamilton paths or cycles lazily
-    // This avoids allocating a massive Vec<Vec<usize>> and allows stopping early
-    pub fn ham_paths(&self, cyclic: bool) -> HamiltonianIter {
-        // check if the first layer exists
-        // we filter out 255 (empty slots) to get actual nodes
-        let nodes: Vec<u8> = self.levels[0]
-            .iter()
-            .filter(|&&n| n != 255)
-            .cloned()
-            .collect();
+    // -- construction -------------------------------------------------------
 
+    /// Build a lattice from its faces; levels and bridges are derived.
+    pub fn from_faces(faces: Vec<Face>) -> Self {
+        let n = faces.len();
+        let dim = faces.iter().map(|f| f.dim).max().unwrap_or(0);
+
+        // levels
+        let mut levels = vec![Vec::new(); dim + 1];
+        for (i, face) in faces.iter().enumerate() {
+            levels[face.dim].push(i);
+        }
+
+        // bridges: a face b is a bridge between i and j iff {i, j} ⊆ downset(b).
+        // Instead of scanning all faces for every pair (O(n^2 * n)), walk the
+        // downset pairs of every face once (O(sum_b deg(b)^2)).
+        // Ties (several common covers) resolve to the smallest face id, as before.
+        let mut bridges = vec![None; n * n];
+        for (b, face) in faces.iter().enumerate() {
+            for (k, &i) in face.downset.iter().enumerate() {
+                for &j in &face.downset[k + 1..] {
+                    if bridges[i * n + j].is_none() {
+                        bridges[i * n + j] = Some(b);
+                        bridges[j * n + i] = Some(b);
+                    }
+                }
+            }
+        }
+
+        Lattice { faces, levels, bridges, dim }
+    }
+
+    /// Parse a lattice file. One face per line:
+    /// `dim: label: {upset}, {downset}`, e.g. `0: 000: {16, 10, 8}, {}`.
+    /// Empty and malformed-header lines are skipped, matching the old parser.
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        let content =
+            read_to_string(path).map_err(|e| format!("reading {} failed: {}", path, e))?;
+        Self::from_str_content(&content)
+    }
+
+    /// Parse lattice data from a string (same format as `from_file`).
+    pub fn from_str_content(content: &str) -> Result<Self, String> {
+        fn parse_set(s: &str, line_no: usize) -> Result<Vec<FaceId>, String> {
+            let s = s.trim().trim_start_matches('{').trim_end_matches('}').trim();
+            if s.is_empty() {
+                return Ok(vec![]);
+            }
+            s.split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(|t| {
+                    t.parse::<FaceId>()
+                        .map_err(|_| format!("line {}: '{}' is not an integer", line_no, t))
+                })
+                .collect()
+        }
+
+        let mut faces = Vec::new();
+        for (line_no, line) in content.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            // "dim: label: {upset}, {downset}" — limit to 3 so the sets stay intact
+            let parts: Vec<&str> = line.splitn(3, ": ").collect();
+            if parts.len() < 3 {
+                continue;
+            }
+
+            let dim = parts[0]
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| format!("line {}: dimension is not an integer", line_no + 1))?;
+            let label = parts[1].trim().to_string();
+
+            let sets: Vec<&str> = parts[2].split("}, {").collect();
+            if sets.len() < 2 {
+                return Err(format!(
+                    "line {}: expected '{{upset}}, {{downset}}'",
+                    line_no + 1
+                ));
+            }
+            let upset = parse_set(sets[0], line_no + 1)?;
+            let downset = parse_set(sets[1], line_no + 1)?;
+
+            faces.push(Face::new(label, dim, upset, downset));
+        }
+
+        Ok(Self::from_faces(faces))
+    }
+
+    // -- getters -------------------------------------------------------------
+
+    pub fn num_faces(&self) -> usize {
+        self.faces.len()
+    }
+
+    /// Dimension of the lattice (maximal face dimension).
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    pub fn face(&self, id: FaceId) -> &Face {
+        &self.faces[id]
+    }
+
+    pub fn faces(&self) -> impl Iterator<Item = (FaceId, &Face)> {
+        self.faces.iter().enumerate()
+    }
+
+    /// Ids of all faces of dimension `d` (empty slice if out of range).
+    pub fn level(&self, d: usize) -> &[FaceId] {
+        self.levels.get(d).map_or(&[], |v| v.as_slice())
+    }
+
+    pub fn num_levels(&self) -> usize {
+        self.levels.len()
+    }
+
+    /// The bridge (common cover) of two faces, if it exists.
+    pub fn bridge(&self, f1: FaceId, f2: FaceId) -> Option<FaceId> {
+        self.bridges[f1 * self.faces.len() + f2]
+    }
+
+    // -- hamiltonian paths on a level -----------------------------------------
+
+    /// Lazily generate hamiltonian paths (or cycles) on the bridge graph of
+    /// level 0. Avoids materialising all paths at once and allows early exit.
+    pub fn ham_paths(&self, cyclic: bool) -> HamiltonianIter {
+        self.ham_paths_on_level(0, cyclic)
+    }
+
+    /// Same as `ham_paths`, but on an arbitrary level: vertices are the faces
+    /// of dimension `d`, edges are pairs with a common cover (a bridge).
+    pub fn ham_paths_on_level(&self, d: usize, cyclic: bool) -> HamiltonianIter {
+        let nodes: Vec<FaceId> = self.level(d).to_vec();
         if nodes.is_empty() {
             return HamiltonianIter::empty();
         }
 
-        // build adjacency list for faster lookups during iteration
-        // since max faces is 100, we can use a direct vector index
-        let mut adj: Vec<Vec<u8>> = vec![vec![]; MAX_FACES]; 
-        let num_nodes = nodes.len();
-
-        // populate adjacency list using the precomputed bridges matrix
-        for i in 0..num_nodes {
-            for j in (i + 1)..num_nodes {
-                let u = nodes[i];
-                let v = nodes[j];
-                
-                // we check both directions u->v and v->u just to be safe
-                let id_u = u as usize;
-                let id_v = v as usize;
-                
-                let connected = self.bridges[id_u][id_v] != 255;
-
-                if connected {
-                    adj[u as usize].push(v);
-                    adj[v as usize].push(u);
+        // adjacency list, indexed directly by FaceId
+        let mut adj: Vec<Vec<FaceId>> = vec![vec![]; self.num_faces()];
+        for (i, &u) in nodes.iter().enumerate() {
+            for &v in &nodes[i + 1..] {
+                if self.bridge(u, v).is_some() {
+                    adj[u].push(v);
+                    adj[v].push(u);
                 }
             }
         }
@@ -209,102 +230,99 @@ impl Lattice {
     }
 }
 
-// Iterator struct to hold the state of the DFS
+// ---------------------------------------------------------------------------
+// HamiltonianIter: iterative DFS over hamiltonian paths/cycles
+// ---------------------------------------------------------------------------
+
 pub struct HamiltonianIter {
-    nodes: Vec<u8>,         // List of valid nodes in the layer
-    adj: Vec<Vec<u8>>,      // Adjacency list
-    cyclic: bool,           // Mode: cycle or path
-    
-    // DFS State
-    stack: Vec<(u8, usize)>, // (Current Node, Index of next neighbor to try in adj list)
-    path: Vec<u8>,           // Current path being built
-    visited: Vec<bool>,      // Lookup for visited nodes (size 100)
-    
-    // Loop control
-    start_node_index: usize, // Which node in 'nodes' are we currently starting from?
+    nodes: Vec<FaceId>,        // vertices of the level graph
+    adj: Vec<Vec<FaceId>>,     // adjacency list, indexed by FaceId
+    cyclic: bool,
+
+    // DFS state
+    stack: Vec<(FaceId, usize)>, // (current node, next neighbour index to try)
+    path: Vec<FaceId>,
+    visited: Vec<bool>,
+
+    start_node_index: usize, // which entry of `nodes` we are starting from
     finished: bool,
 }
 
 impl HamiltonianIter {
-    fn new(nodes: Vec<u8>, adj: Vec<Vec<u8>>, cyclic: bool) -> Self {
+    fn new(nodes: Vec<FaceId>, adj: Vec<Vec<FaceId>>, cyclic: bool) -> Self {
+        let n = nodes.len();
+        let num_ids = adj.len();
         let mut iter = HamiltonianIter {
             nodes,
             adj,
             cyclic,
-            stack: Vec::with_capacity(100),
-            path: Vec::with_capacity(100),
-            visited: vec![false; 100],
+            stack: Vec::with_capacity(n),
+            path: Vec::with_capacity(n),
+            visited: vec![false; num_ids],
             start_node_index: 0,
             finished: false,
         };
-        
-        // initialize the first start node
         iter.push_start_node();
         iter
     }
 
     fn empty() -> Self {
         HamiltonianIter {
-            nodes: vec![], adj: vec![], cyclic: false, 
-            stack: vec![], path: vec![], visited: vec![], 
-            start_node_index: 0, finished: true 
+            nodes: vec![],
+            adj: vec![],
+            cyclic: false,
+            stack: vec![],
+            path: vec![],
+            visited: vec![],
+            start_node_index: 0,
+            finished: true,
         }
     }
 
-    // Helper to reset state and push a new start node
+    /// Reset DFS state and start from the next start node.
     fn push_start_node(&mut self) {
         if self.start_node_index >= self.nodes.len() {
             self.finished = true;
             return;
         }
-
-        // for cycles, we only need to try starting from the very first node
-        // because a cycle is a loop (A-B-C-A is same as B-C-A-B)
+        // For cycles only the first start node is needed: every hamiltonian
+        // cycle is a rotation of one through nodes[0].
         if self.cyclic && self.start_node_index > 0 {
             self.finished = true;
             return;
         }
 
-        let start_node = self.nodes[self.start_node_index];
-        
+        let start = self.nodes[self.start_node_index];
         self.path.clear();
         self.stack.clear();
-        // clear visited array
         self.visited.fill(false);
 
-        self.visited[start_node as usize] = true;
-        self.path.push(start_node);
-        self.stack.push((start_node, 0)); // start with 0th neighbor
+        self.visited[start] = true;
+        self.path.push(start);
+        self.stack.push((start, 0));
     }
 }
 
 impl Iterator for HamiltonianIter {
-    type Item = Vec<u8>;
+    type Item = Vec<FaceId>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.finished {
             return None;
         }
 
+        // trivial single-vertex level
         if self.nodes.len() == 1 {
-            // Wir prüfen, ob der Pfad noch existiert (wurde in 'new' -> 'push_start_node' gesetzt)
-            if self.path.len() == 1 {
-                let res = self.path.clone();
-                
-                // Aufräumen, damit der nächste Aufruf None zurückgibt
-                self.path.clear();
-                self.stack.clear();
-                self.finished = true;
-                
-                return Some(res);
-            }
-            return None;
+            self.finished = true;
+            return if self.path.len() == 1 {
+                Some(std::mem::take(&mut self.path))
+            } else {
+                None
+            };
         }
 
-        // Iterative DFS loop
         loop {
-            // if stack is empty, we are done with the current start_node
-            // move to the next possible start node
+            // exhausted current start node -> advance to next one
             if self.stack.is_empty() {
                 self.start_node_index += 1;
                 self.push_start_node();
@@ -314,57 +332,44 @@ impl Iterator for HamiltonianIter {
                 continue;
             }
 
-            // peek at the current node and neighbor index
             let (u, neighbor_idx) = *self.stack.last().unwrap();
-            let u_idx = u as usize;
-            
-            // if we have explored all neighbors of u, backtrack
-            if neighbor_idx >= self.adj[u_idx].len() {
+
+            // all neighbours of u tried -> backtrack
+            if neighbor_idx >= self.adj[u].len() {
                 self.stack.pop();
                 self.path.pop();
-                self.visited[u_idx] = false;
+                self.visited[u] = false;
                 continue;
             }
 
-            // prepare to look at the next neighbor next time
+            // advance neighbour cursor for next visit
             self.stack.last_mut().unwrap().1 += 1;
 
-            let v = self.adj[u_idx][neighbor_idx];
-            let v_idx = v as usize;
+            let v = self.adj[u][neighbor_idx];
+            if self.visited[v] {
+                continue;
+            }
 
-            if !self.visited[v_idx] {
-                // move forward
-                self.visited[v_idx] = true;
-                self.path.push(v);
-                self.stack.push((v, 0));
+            self.visited[v] = true;
+            self.path.push(v);
+            self.stack.push((v, 0));
 
-                // check if path is complete
-                if self.path.len() == self.nodes.len() {
-                    let mut result = None;
+            if self.path.len() == self.nodes.len() {
+                let result = if self.cyclic {
+                    // must close up to the start node
+                    self.adj[v].contains(&self.path[0]).then(|| self.path.clone())
+                } else {
+                    // symmetry breaking for paths: start <= end
+                    (self.path[0] <= *self.path.last().unwrap()).then(|| self.path.clone())
+                };
 
-                    if self.cyclic {
-                        // check if last node connects back to start
-                        let start = self.path[0];
-                        if self.adj[v_idx].contains(&start) {
-                            result = Some(self.path.clone());
-                        }
-                    } else {
-                        // break symmetry for paths: start <= end
-                        if self.path[0] <= self.path[self.path.len() - 1] {
-                            result = Some(self.path.clone());
-                        }
-                    }
+                // backtrack immediately so the search can continue
+                self.stack.pop();
+                self.path.pop();
+                self.visited[v] = false;
 
-                    // CRITICAL: We must backtrack immediately to allow finding the next solution
-                    // otherwise the loop would get stuck at max depth
-                    self.stack.pop();
-                    self.path.pop();
-                    self.visited[v_idx] = false;
-
-                    // if we found a valid result, return it
-                    if result.is_some() {
-                        return result;
-                    }
+                if result.is_some() {
+                    return result;
                 }
             }
         }

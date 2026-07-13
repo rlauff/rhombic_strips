@@ -1,15 +1,21 @@
-[profile.release]
-debug = true
-
 [package]
 name = "rhombic_strips"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
+[lib]
+name = "rhombic_strips"
+crate-type = ["cdylib", "rlib"]
 
-rayon = "1.8"
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 itertools = "0.13.0"
 colored = "2.0.4"
 egui = "0.33.3"
 eframe = "0.33.3"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.8"
