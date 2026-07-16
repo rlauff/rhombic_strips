@@ -314,40 +314,58 @@ pub fn strips(l: &Lattice, cyclic: bool) -> impl Iterator<Item = Strip> + '_ {
         .flat_map(move |path| extensions(vec![path], l, max_dim, cyclic))
 }
 
+/// How many independent search branches to split into: enough that rayon can
+/// balance uneven subtrees across `threads` workers.
+#[cfg(not(target_arch = "wasm32"))]
+fn seed_target() -> usize {
+    rayon::current_num_threads() * 16
+}
+
 /// All rhombic strips of the lattice, computed in parallel.
 ///
-/// Parallelises over the top of the search tree (hamiltonian paths and their
-/// first extension layers); each branch is then explored sequentially. This
-/// avoids the per-level `par_bridge` overhead of spawning tasks for every
-/// node of the search tree.
+/// Parallelises over seeds of the hamiltonian-path DFS itself
+/// (`Lattice::ham_path_seeds`): each worker owns an independent subtree of
+/// the path search plus all its strip extensions. A `par_bridge()` over the
+/// sequential `ham_paths` iterator would leave every core but one idle
+/// whenever *finding* the paths dominates — which is the typical hard case.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn strips_parallel(l: &Lattice, cyclic: bool) -> Vec<Strip> {
     let max_dim = l.dim();
-    if max_dim == 0 {
-        return l.ham_paths(cyclic).map(|p| vec![p]).collect();
-    }
-    l.ham_paths(cyclic)
-        .par_bridge()
-        .flat_map_iter(|path| {
-            let strip = vec![path];
-            extensions(strip, l, max_dim, cyclic)
+    l.ham_path_seeds(cyclic, seed_target())
+        .into_par_iter()
+        .flat_map_iter(|paths| {
+            paths.flat_map(move |path| {
+                if max_dim == 0 {
+                    itertools::Either::Left(std::iter::once(vec![path]))
+                } else {
+                    itertools::Either::Right(extensions(vec![path], l, max_dim, cyclic))
+                }
+            })
         })
         .collect()
 }
 
 /// Count all rhombic strips without storing them.
 ///
-/// Native-only (parallel). In the browser, `web::StripEnumerator` counts by
-/// draining the sequential [`strips`] iterator, so it needs no rayon.
+/// Native-only (parallel over DFS seeds, see [`strips_parallel`]). In the
+/// browser, `web::StripEnumerator` counts by draining the sequential
+/// [`strips`] iterator, so it needs no rayon.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn count_strips(l: &Lattice, cyclic: bool) -> usize {
     let max_dim = l.dim();
-    if max_dim == 0 {
-        return l.ham_paths(cyclic).count();
-    }
-    l.ham_paths(cyclic)
-        .par_bridge()
-        .map(|path| extensions(vec![path], l, max_dim, cyclic).count())
+    l.ham_path_seeds(cyclic, seed_target())
+        .into_par_iter()
+        .map(|paths| {
+            paths
+                .map(|path| {
+                    if max_dim == 0 {
+                        1
+                    } else {
+                        extensions(vec![path], l, max_dim, cyclic).count()
+                    }
+                })
+                .sum::<usize>()
+        })
         .sum()
 }
 
@@ -367,15 +385,29 @@ pub fn layer_extends(
         .any(|next| layer_extends(&next, current_dim + 1, l, max_dim, cyclic))
 }
 
-/// Does the lattice admit a rhombic strip at all? Parallel over the
-/// hamiltonian paths of level 0, early exit as soon as one is found.
+/// Does the lattice admit a rhombic strip at all? Parallel over seeds of the
+/// hamiltonian-path DFS, with a shared flag so all workers stop as soon as
+/// any of them finds a strip.
 ///
 /// Native-only (parallel). In the browser, `web::StripEnumerator` in "exists"
 /// mode pulls a single item from the sequential [`strips`] iterator instead.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn strip_exists(l: &Lattice, cyclic: bool) -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
     let max_dim = l.dim();
-    l.ham_paths(cyclic)
-        .par_bridge()
-        .any(|path| layer_extends(&path, 0, l, max_dim, cyclic))
+    let found = AtomicBool::new(false);
+    l.ham_path_seeds(cyclic, seed_target())
+        .into_par_iter()
+        .any(|paths| {
+            for path in paths {
+                if found.load(Ordering::Relaxed) {
+                    return false; // someone else already succeeded
+                }
+                if layer_extends(&path, 0, l, max_dim, cyclic) {
+                    found.store(true, Ordering::Relaxed);
+                    return true;
+                }
+            }
+            false
+        })
 }

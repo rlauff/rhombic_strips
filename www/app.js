@@ -1507,7 +1507,10 @@ $('btn-cancel').addEventListener('click', () => {
     remote.abort.abort();
     remote.abort = null;
   } else if (state.worker) {
-    state.worker.postMessage({ cmd: 'cancel' });
+    // terminate, don't post: a 'cancel' message can never reach a worker
+    // that is stuck inside one long wasm step (the budget is only checked
+    // between strips, and finding the next strip can take arbitrarily long).
+    restartWorker();
   }
   state.job = null;
   stopTicker();

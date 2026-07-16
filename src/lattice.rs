@@ -210,12 +210,17 @@ impl Lattice {
     /// Same as `ham_paths`, but on an arbitrary level: vertices are the faces
     /// of dimension `d`, edges are pairs with a common cover (a bridge).
     pub fn ham_paths_on_level(&self, d: usize, cyclic: bool) -> HamiltonianIter {
-        let nodes: Vec<FaceId> = self.level(d).to_vec();
+        let (nodes, adj) = self.level_graph(d);
         if nodes.is_empty() {
             return HamiltonianIter::empty();
         }
+        HamiltonianIter::new(nodes, adj, cyclic)
+    }
 
-        // adjacency list, indexed directly by FaceId
+    /// Bridge graph of level `d`: its vertices and an adjacency list indexed
+    /// directly by FaceId.
+    fn level_graph(&self, d: usize) -> (Vec<FaceId>, Vec<Vec<FaceId>>) {
+        let nodes: Vec<FaceId> = self.level(d).to_vec();
         let mut adj: Vec<Vec<FaceId>> = vec![vec![]; self.num_faces()];
         for (i, &u) in nodes.iter().enumerate() {
             for &v in &nodes[i + 1..] {
@@ -225,8 +230,68 @@ impl Lattice {
                 }
             }
         }
+        (nodes, adj)
+    }
 
-        HamiltonianIter::new(nodes, adj, cyclic)
+    /// Split `ham_paths(cyclic)` into independent iterators whose outputs
+    /// partition the full set of hamiltonian paths — the unit of work for
+    /// parallel search. Aim for at least `target` seeds (fewer only if the
+    /// search tree is too small).
+    ///
+    /// Each seed owns the DFS subtree below one simple path of a fixed
+    /// length k (the same start-node scheme and symmetry breaking as the
+    /// sequential iterator, applied at yield time). Every hamiltonian path
+    /// has exactly one length-k prefix, so the union over the uniform-depth
+    /// prefix set is exact and duplicate-free. This parallelises the path
+    /// *search* itself — with a plain `par_bridge()` over `ham_paths` the
+    /// single sequential DFS producer is the bottleneck and all cores but
+    /// one sit idle whenever generating paths dominates.
+    pub fn ham_path_seeds(&self, cyclic: bool, target: usize) -> Vec<HamiltonianIter> {
+        let (nodes, adj) = self.level_graph(0);
+        let n = nodes.len();
+        if n == 0 {
+            return vec![HamiltonianIter::empty()];
+        }
+        if n <= 3 || target <= 1 {
+            return vec![HamiltonianIter::new(nodes, adj, cyclic)];
+        }
+
+        // Uniform-depth prefix expansion. Cycles are anchored at nodes[0]
+        // (every hamiltonian cycle is a rotation of one through it), paths
+        // may start anywhere; both exactly as in `push_start_node`.
+        let mut prefixes: Vec<Vec<FaceId>> = if cyclic {
+            vec![vec![nodes[0]]]
+        } else {
+            nodes.iter().map(|&u| vec![u]).collect()
+        };
+        let mut depth = 1;
+        while prefixes.len() < target && depth < n - 1 {
+            let mut next = Vec::with_capacity(prefixes.len() * 4);
+            for p in &prefixes {
+                let last = *p.last().expect("prefix non-empty");
+                for &v in &adj[last] {
+                    if !p.contains(&v) {
+                        let mut q = p.clone();
+                        q.push(v);
+                        next.push(q);
+                    }
+                }
+            }
+            if next.is_empty() {
+                // No simple path of length depth+1 <= n-1: no hamiltonian
+                // path exists at all.
+                return vec![HamiltonianIter::empty()];
+            }
+            prefixes = next;
+            depth += 1;
+        }
+
+        let nodes = std::sync::Arc::new(nodes);
+        let adj = std::sync::Arc::new(adj);
+        prefixes
+            .into_iter()
+            .map(|p| HamiltonianIter::with_prefix(nodes.clone(), adj.clone(), cyclic, p))
+            .collect()
     }
 }
 
@@ -235,8 +300,8 @@ impl Lattice {
 // ---------------------------------------------------------------------------
 
 pub struct HamiltonianIter {
-    nodes: Vec<FaceId>,        // vertices of the level graph
-    adj: Vec<Vec<FaceId>>,     // adjacency list, indexed by FaceId
+    nodes: std::sync::Arc<Vec<FaceId>>, // vertices of the level graph
+    adj: std::sync::Arc<Vec<Vec<FaceId>>>, // adjacency list, indexed by FaceId
     cyclic: bool,
 
     // DFS state
@@ -245,11 +310,40 @@ pub struct HamiltonianIter {
     visited: Vec<bool>,
 
     start_node_index: usize, // which entry of `nodes` we are starting from
+    prefix_mode: bool,       // seeded: exhaust one subtree, don't advance starts
     finished: bool,
 }
 
 impl HamiltonianIter {
     fn new(nodes: Vec<FaceId>, adj: Vec<Vec<FaceId>>, cyclic: bool) -> Self {
+        let n = nodes.len();
+        let num_ids = adj.len();
+        let mut iter = HamiltonianIter {
+            nodes: std::sync::Arc::new(nodes),
+            adj: std::sync::Arc::new(adj),
+            cyclic,
+            stack: Vec::with_capacity(n),
+            path: Vec::with_capacity(n),
+            visited: vec![false; num_ids],
+            start_node_index: 0,
+            prefix_mode: false,
+            finished: false,
+        };
+        iter.push_start_node();
+        iter
+    }
+
+    /// Seeded iterator: exactly the hamiltonian paths whose first
+    /// `prefix.len()` vertices equal `prefix` (which must be a simple path in
+    /// the level graph). Frames above the deepest one get exhausted
+    /// neighbour cursors, so backtracking never explores the prefix's
+    /// siblings — those belong to other seeds.
+    fn with_prefix(
+        nodes: std::sync::Arc<Vec<FaceId>>,
+        adj: std::sync::Arc<Vec<Vec<FaceId>>>,
+        cyclic: bool,
+        prefix: Vec<FaceId>,
+    ) -> Self {
         let n = nodes.len();
         let num_ids = adj.len();
         let mut iter = HamiltonianIter {
@@ -260,21 +354,29 @@ impl HamiltonianIter {
             path: Vec::with_capacity(n),
             visited: vec![false; num_ids],
             start_node_index: 0,
+            prefix_mode: true,
             finished: false,
         };
-        iter.push_start_node();
+        let deepest = prefix.len() - 1;
+        for (i, &u) in prefix.iter().enumerate() {
+            iter.visited[u] = true;
+            iter.path.push(u);
+            let cursor = if i == deepest { 0 } else { iter.adj[u].len() };
+            iter.stack.push((u, cursor));
+        }
         iter
     }
 
     fn empty() -> Self {
         HamiltonianIter {
-            nodes: vec![],
-            adj: vec![],
+            nodes: std::sync::Arc::new(vec![]),
+            adj: std::sync::Arc::new(vec![]),
             cyclic: false,
             stack: vec![],
             path: vec![],
             visited: vec![],
             start_node_index: 0,
+            prefix_mode: false,
             finished: true,
         }
     }
@@ -323,7 +425,12 @@ impl Iterator for HamiltonianIter {
 
         loop {
             // exhausted current start node -> advance to next one
+            // (a seeded iterator owns exactly one subtree: it is done)
             if self.stack.is_empty() {
+                if self.prefix_mode {
+                    self.finished = true;
+                    return None;
+                }
                 self.start_node_index += 1;
                 self.push_start_node();
                 if self.finished {
