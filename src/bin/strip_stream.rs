@@ -240,7 +240,11 @@ fn run_enumerate(l: &Lattice, cyclic: bool, cap: usize) {
     for strip in strips(l, cyclic) {
         count += 1;
         let (edges, cyclic_edges) = plotting::edges_strip(&strip, l, cyclic);
-        batch.push(StripOut { layers: strip, edges, cyclic_edges });
+        batch.push(StripOut {
+            layers: strip,
+            edges,
+            cyclic_edges,
+        });
 
         if last_flush.elapsed() >= Duration::from_millis(30) || batch.len() >= 8 {
             flush(&mut batch, count);
@@ -253,7 +257,10 @@ fn run_enumerate(l: &Lattice, cyclic: bool, cap: usize) {
     }
     flush(&mut batch, count);
     if capped {
-        note(&format!("stopped at the first {} strips (raise the cap to get more)", cap));
+        note(&format!(
+            "stopped at the first {} strips (raise the cap to get more)",
+            cap
+        ));
     }
     emit(&serde_json::json!({"type": "done", "count": count, "capped": capped}));
 }
