@@ -342,6 +342,18 @@ function render() {
     }
   }
 
+  // empty worksheet: a quiet hint instead of a blank page
+  if (state.nodes.length === 0) {
+    ctx.fillStyle = '#aaa598';
+    ctx.textAlign = 'center';
+    ctx.font = '13.5px "IBM Plex Sans", sans-serif';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('Double-click to add a node, or pick an example on the left.', w / 2, h / 2 - 6);
+    ctx.textBaseline = 'top';
+    ctx.font = 'italic 12.5px "IBM Plex Sans", sans-serif';
+    ctx.fillText('Press ? for keyboard & mouse reference.', w / 2, h / 2 + 6);
+  }
+
   const strip = currentStrip();
   const inStrip = new Map(); // id -> layer index
   if (strip) {
@@ -709,18 +721,128 @@ renameInput.addEventListener('keydown', (e) => {
 });
 renameInput.addEventListener('blur', () => finishRename(true));
 
+// ---- shortcut sheet ------------------------------------------------------------
+
+const helpOverlay = $('help-overlay');
+
+function showHelp(show) {
+  helpOverlay.hidden = !show;
+}
+
+$('btn-help').addEventListener('click', () => showHelp(true));
+$('zoom-help').addEventListener('click', () => showHelp(true));
+$('help-close').addEventListener('click', () => showHelp(false));
+helpOverlay.addEventListener('click', (e) => {
+  if (e.target === helpOverlay) showHelp(false); // click outside the card
+});
+
 // ---- global shortcuts --------------------------------------------------------
 
+function zoomCentered(factor) {
+  const [w, h] = canvasSize();
+  zoomAt(w / 2, h / 2, factor);
+}
+
+$('zoom-in').addEventListener('click', () => zoomCentered(1.2));
+$('zoom-out').addEventListener('click', () => zoomCentered(1 / 1.2));
+
 window.addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+    return; // typing in a field
+  }
+
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     undo();
+    return;
   }
+
   if (e.key === 'Escape') {
-    cancelLink();
-    finishRename(false);
-    render();
+    if (!helpOverlay.hidden) {
+      showHelp(false);
+    } else {
+      cancelLink();
+      finishRename(false);
+      render();
+    }
+    return;
+  }
+
+  if (e.key === '?') {
+    showHelp(helpOverlay.hidden);
+    return;
+  }
+
+  // single-key shortcuts: never steal browser/system chords
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+  const poset = state.mode === 'poset';
+  switch (e.key) {
+    case 'n':
+      if (pointer.inside) {
+        addNodeAt(...toWorld(pointer.sx, pointer.sy));
+      } else {
+        $('btn-add').click();
+      }
+      break;
+    case 'Delete':
+    case 'Backspace': {
+      e.preventDefault();
+      const n = state.hovered != null ? nodeById(state.hovered) : null;
+      if (n) {
+        structuralChange();
+        removeNode(n.id);
+        log(`Deleted node “${n.label}”.`);
+        refresh();
+      }
+      break;
+    }
+    case 'a':
+      $('btn-arrange').click();
+      break;
+    case 'f':
+      fitView();
+      render();
+      break;
+    case 'm':
+      setMode(poset ? 'graph' : 'poset');
+      refresh();
+      break;
+    case '+':
+    case '=':
+      zoomCentered(1.2);
+      break;
+    case '-':
+    case '_':
+      zoomCentered(1 / 1.2);
+      break;
+    case 'x':
+      if (poset) startJob('exists');
+      break;
+    case 'c':
+      if (poset) startJob('count');
+      break;
+    case 'e':
+      if (poset) startJob('enumerate');
+      break;
+    case 's':
+      if (state.strips.length > 0) $('btn-toggle-strip').click();
+      break;
+    case 't':
+      if (poset) $('btn-tikz').click();
+      break;
+    case 'ArrowLeft':
+      if (state.strips.length > 0) {
+        e.preventDefault();
+        $('btn-prev').click();
+      }
+      break;
+    case 'ArrowRight':
+      if (state.strips.length > 0) {
+        e.preventDefault();
+        $('btn-next').click();
+      }
+      break;
   }
 });
 
@@ -738,8 +860,8 @@ function setMode(mode) {
   document.querySelectorAll('[data-mode]').forEach((el) => {
     el.hidden = el.dataset.mode !== mode;
   });
-  $('btn-arrange').textContent =
-    mode === 'poset' ? 'Arrange by rank' : 'Circle layout';
+  $('btn-arrange').innerHTML =
+    mode === 'poset' ? 'Arrange by rank <kbd>A</kbd>' : 'Circle layout <kbd>A</kbd>';
   updateStats();
 }
 
@@ -750,20 +872,23 @@ $('mode-graph').addEventListener('click', () => { setMode('graph'); refresh(); }
 // Sidebar: edit
 // ---------------------------------------------------------------------------
 
-$('btn-add').addEventListener('click', () => {
+/// Add a node near (wx, wy), nudging right past occupied spots; used by the
+/// "Add" button (view center) and the N shortcut (pointer position).
+function addNodeAt(wx, wy) {
   structuralChange();
-  const [w, h] = canvasSize();
-  let [wx, wy] = toWorld(w / 2, h / 2);
-
-  // FIX: If a node is already occupying this spot, nudge the new one to the right
   while (state.nodes.some((n) => Math.abs(n.x - wx) < 10 && Math.abs(n.y - wy) < 10)) {
-    wx += 60; // Shift right by 60 world units
+    wx += 60;
   }
-
   const id = addNode($('label-input').value.trim(), wx, wy);
   $('label-input').value = '';
   log(`Added node ${labelOf(id)}.`);
   refresh();
+}
+
+$('btn-add').addEventListener('click', () => {
+  const [w, h] = canvasSize();
+  const [wx, wy] = toWorld(w / 2, h / 2);
+  addNodeAt(wx, wy);
 });
 
 $('btn-arrange').addEventListener('click', () => {
@@ -1202,7 +1327,7 @@ init()
     const [w, h] = canvasSize();
     state.view.ox = w / 2;
     state.view.oy = h * 0.66;
-    log('Welcome. Double-click the canvas to add nodes, click two nodes to relate them.');
+    log('Ready. Double-click the canvas to add nodes; press ? for all shortcuts.');
     refresh();
   })
   .catch((e) => log(`Failed to load the WebAssembly module: ${e}`, true));

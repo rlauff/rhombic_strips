@@ -37,20 +37,6 @@
 <aside class="panel" id="panel">
 
   <section>
-    <h2>Edit</h2>
-    <div class="row">
-      <input id="label-input" type="text" placeholder="Label (empty = numbered)" spellcheck="false">
-      <button id="btn-add">Add node</button>
-    </div>
-    <div class="row wrap">
-      <button id="btn-arrange">Arrange by rank</button>
-      <button id="btn-fit">Fit view</button>
-      <button id="btn-undo">Undo</button>
-      <button id="btn-clear" class="danger">Clear</button>
-    </div>
-  </section>
-
-  <section>
     <h2>Examples</h2>
     <div class="row">
       <label class="inline" for="example-n">n</label>
@@ -78,8 +64,8 @@
 
   <section data-mode="graph" hidden>
     <h2>Graph associahedra</h2>
-    <button id="btn-tube-poset" class="block" title="Connected subsets of the drawn graph, ordered by inclusion">Tube poset (inclusion)</button>
-    <button id="btn-graph-assoc" class="block" title="Face lattice of the graph associahedron: tubings under reverse inclusion">Graph associahedron (tubings)</button>
+    <button id="btn-tube-poset" class="block" title="Connected subsets of the drawn graph, ordered by inclusion">Tube poset <span class="dim">inclusion order</span></button>
+    <button id="btn-graph-assoc" class="block" title="Face lattice of the graph associahedron: tubings under reverse inclusion">Graph associahedron <span class="dim">tubing lattice</span></button>
   </section>
 
   <section data-mode="poset">
@@ -94,37 +80,43 @@
     </div>
   </section>
 
-  <section data-mode="poset">
-    <h2>File</h2>
-    <div class="row wrap">
-      <button id="btn-load">Load lattice…</button>
-      <button id="btn-save">Save lattice</button>
-      <button id="btn-tikz">Export TikZ</button>
+  <section>
+    <h2>Edit</h2>
+    <div class="row">
+      <input id="label-input" type="text" placeholder="Label (empty = numbered)" spellcheck="false">
+      <button id="btn-add" title="Add a node at the view center (N adds at the cursor)">Add <kbd>N</kbd></button>
     </div>
-    <input id="file-input" type="file" accept=".txt,.lat,text/plain" hidden>
+    <div class="row wrap">
+      <button id="btn-arrange" title="Arrange by rank">Arrange <kbd>A</kbd></button>
+      <button id="btn-fit" title="Fit the diagram in view">Fit <kbd>F</kbd></button>
+      <button id="btn-undo" title="Undo last structural change">Undo <kbd>⌃Z</kbd></button>
+      <button id="btn-clear" class="danger">Clear</button>
+    </div>
   </section>
 
-  <section data-mode="poset">
+  <section data-mode="poset" class="compute">
     <h2>Rhombic strips</h2>
     <label class="check"><input id="cyclic" type="checkbox"> Cyclic strips</label>
-    <div class="row wrap">
-      <button id="btn-exists">Existence</button>
-      <button id="btn-count">Count</button>
-      <button id="btn-enumerate">Enumerate</button>
+    <div class="compute-row">
+      <button id="btn-exists" title="Does a rhombic strip exist?">Existence <kbd>X</kbd></button>
+      <button id="btn-count" title="Count all rhombic strips">Count <kbd>C</kbd></button>
+      <button id="btn-enumerate" title="Enumerate and browse strips">Enumerate <kbd>E</kbd></button>
     </div>
-    <div id="job-row" class="job" hidden style="display: none;">
+    <div id="job-row" class="job" hidden>
       <span class="spinner" aria-hidden="true"></span>
       <span id="job-status">searching…</span>
       <button id="btn-cancel" class="danger small">Cancel</button>
     </div>
 
     <div id="strip-nav" hidden>
-      <p id="strip-counter" class="group-label">Strip 1 of 1</p>
-      <div class="row wrap">
-        <button id="btn-prev">◀ Prev</button>
-        <button id="btn-next">Next ▶</button>
-        <button id="btn-arrange-strip">Arrange</button>
-        <button id="btn-toggle-strip">Hide</button>
+      <div class="strip-head">
+        <p id="strip-counter" class="strip-counter">Strip 1 of 1</p>
+        <button id="btn-toggle-strip" class="small">Hide</button>
+      </div>
+      <div class="row">
+        <button id="btn-prev" class="grow">◀ <kbd>←</kbd></button>
+        <button id="btn-next" class="grow"><kbd>→</kbd> ▶</button>
+        <button id="btn-arrange-strip" title="Lay the diagram out layer by layer">Arrange strip</button>
       </div>
       <details id="layers-box">
         <summary>Strip layers</summary>
@@ -134,19 +126,19 @@
     </div>
   </section>
 
+  <section data-mode="poset">
+    <h2>File</h2>
+    <div class="row wrap">
+      <button id="btn-load">Load lattice…</button>
+      <button id="btn-save">Save lattice</button>
+      <button id="btn-tikz" title="TikZ of the diagram, or of the shown strip">TikZ <kbd>T</kbd></button>
+    </div>
+    <input id="file-input" type="file" accept=".txt,.lat,text/plain" hidden>
+  </section>
+
   <div class="panel-foot">
     <p id="log" class="log" role="status">Loading WebAssembly module…</p>
-    <details>
-      <summary>Controls</summary>
-      <ul class="hints">
-        <li>Double-click canvas — add node</li>
-        <li>Double-click node — rename it</li>
-        <li>Click node, then another — toggle relation/edge</li>
-        <li>Right-click node — delete it</li>
-        <li>Esc — cancel relation · Ctrl+Z — undo</li>
-        <li>Drag node — move · drag canvas — pan · wheel — zoom</li>
-      </ul>
-    </details>
+    <button id="btn-help" class="help-link">Keyboard &amp; mouse <kbd>?</kbd></button>
   </div>
 </aside>
 
@@ -154,8 +146,57 @@
   <canvas id="canvas"></canvas>
   <input id="rename-input" type="text" hidden spellcheck="false" aria-label="Rename node">
   <div class="zoombox">
-    <button id="zoom-in" aria-label="Zoom in">+</button>
-    <button id="zoom-out" aria-label="Zoom out">−</button>
+    <button id="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
+    <button id="zoom-out" aria-label="Zoom out" title="Zoom out (−)">−</button>
+    <button id="zoom-help" aria-label="Keyboard and mouse reference" title="Shortcuts (?)">?</button>
+  </div>
+
+  <div id="help-overlay" class="help-overlay" hidden>
+    <div class="help-card" role="dialog" aria-modal="true" aria-label="Keyboard and mouse reference">
+      <header>
+        <h3>Reference</h3>
+        <button id="help-close" class="small">Esc</button>
+      </header>
+      <div class="help-cols">
+        <div>
+          <h4>Mouse</h4>
+          <dl>
+            <dt>2×-click canvas</dt><dd>add node</dd>
+            <dt>2×-click node</dt><dd>rename</dd>
+            <dt>click A, click B</dt><dd>toggle relation / edge</dd>
+            <dt>right-click node</dt><dd>delete</dd>
+            <dt>drag node</dt><dd>move</dd>
+            <dt>drag canvas</dt><dd>pan</dd>
+            <dt>wheel</dt><dd>zoom</dd>
+          </dl>
+        </div>
+        <div>
+          <h4>Editing</h4>
+          <dl>
+            <dt><kbd>N</kbd></dt><dd>add node at cursor</dd>
+            <dt><kbd>⌫</kbd></dt><dd>delete hovered node</dd>
+            <dt><kbd>⌃Z</kbd></dt><dd>undo</dd>
+            <dt><kbd>A</kbd></dt><dd>arrange by rank / circle</dd>
+            <dt><kbd>F</kbd></dt><dd>fit view</dd>
+            <dt><kbd>+</kbd> <kbd>−</kbd></dt><dd>zoom</dd>
+            <dt><kbd>M</kbd></dt><dd>poset ⇄ graph mode</dd>
+            <dt><kbd>Esc</kbd></dt><dd>cancel relation / close</dd>
+          </dl>
+        </div>
+        <div>
+          <h4>Strips</h4>
+          <dl>
+            <dt><kbd>X</kbd></dt><dd>existence</dd>
+            <dt><kbd>C</kbd></dt><dd>count</dd>
+            <dt><kbd>E</kbd></dt><dd>enumerate</dd>
+            <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>previous / next strip</dd>
+            <dt><kbd>S</kbd></dt><dd>show / hide strip</dd>
+            <dt><kbd>T</kbd></dt><dd>export TikZ</dd>
+            <dt><kbd>?</kbd></dt><dd>this sheet</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
   </div>
 </main>
 </div>

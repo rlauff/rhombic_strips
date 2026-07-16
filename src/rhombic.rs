@@ -232,9 +232,9 @@ pub fn next_layers(
     let dim = l.face(last_layer[0]).dim();
     let n = last_layer.len();
     let num_bridges = match (cyclic, n) {
-        (true, 1) => 0,     // single face: nothing to bridge
-        (true, 2) => 1,     // the one bridge already closes the cycle
-        (true, _) => n,     // cyclic: as many bridges as faces
+        (true, 1) => 0,      // single face: nothing to bridge
+        (true, 2) => 1,      // the one bridge already closes the cycle
+        (true, _) => n,      // cyclic: as many bridges as faces
         (false, _) => n - 1, // linear: one less
     };
 

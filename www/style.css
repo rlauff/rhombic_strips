@@ -23,6 +23,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -92,11 +93,10 @@ body {
 .frame { display: flex; flex: 1; min-height: 0; }
 
 .panel {
-  width: 302px;
+  width: 306px;
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 0;
   overflow-y: auto;
   background: var(--panel);
   border-right: 1px solid var(--hairline);
@@ -104,10 +104,13 @@ body {
   scrollbar-color: var(--hairline) transparent;
 }
 .panel section {
-  padding: 14px 16px 16px;
+  padding: 13px 16px 15px;
   border-bottom: 1px solid var(--hairline);
 }
 .panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0 0 10px;
   font-size: 11px;
   font-weight: 600;
@@ -115,13 +118,20 @@ body {
   text-transform: uppercase;
   color: var(--text-dim);
 }
+.panel h2::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}
 .group-label { margin: 10px 0 6px; font-size: 12.5px; color: var(--text-dim); }
-.dim { color: var(--text-dim); font-weight: 400; }
+.dim { color: var(--text-dim); font-weight: 400; font-size: 12px; }
 
 .row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
 .row.wrap { flex-wrap: wrap; }
 .row:last-child { margin-bottom: 0; }
 .inline { color: var(--text-dim); }
+.grow { flex: 1; }
 
 /* ---- controls --------------------------------------------------------- */
 
@@ -137,10 +147,34 @@ button {
   transition: border-color 120ms, background 120ms;
 }
 button:hover:not(:disabled) { border-color: var(--text-dim); }
+button:active:not(:disabled) { background: #2b3040; }
 button:disabled { opacity: 0.4; cursor: default; }
-button.block { display: block; width: 100%; margin-bottom: 6px; text-align: left; }
+button.block {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 6px;
+  text-align: left;
+}
 button.small { padding: 3px 9px; font-size: 12px; }
 button.danger:hover:not(:disabled) { border-color: var(--vermillion); color: #ffb27a; }
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: var(--ink);
+  border: 1px solid var(--hairline);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 5px 1px;
+  white-space: nowrap;
+}
+button kbd { margin-left: 4px; position: relative; top: -0.5px; }
+button:hover:not(:disabled) kbd { color: var(--text); }
 
 input[type="text"], input[type="number"] {
   font: inherit;
@@ -168,13 +202,28 @@ input::placeholder { color: #6b7280; }
 details summary { cursor: pointer; color: var(--text-dim); font-size: 13px; }
 details[open] summary { margin-bottom: 6px; }
 
+/* ---- compute section (the instrument's run block) ----------------------- */
+
+section.compute {
+  border-left: 3px solid var(--vermillion);
+  padding-left: 13px;
+  background: linear-gradient(90deg, rgba(230, 97, 0, 0.05), transparent 55%);
+}
+.compute-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.compute-row button { padding: 6px 8px; }
+.compute-row button:last-child { grid-column: 1 / -1; }
+
 /* ---- job / strips ------------------------------------------------------ */
 
 .job {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 10px;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-dim);
@@ -192,7 +241,20 @@ details[open] summary { margin-bottom: 6px; }
   .spinner { animation: none; border-top-color: var(--hairline); background: var(--vermillion); }
 }
 
-#strip-nav { margin-top: 10px; }
+#strip-nav { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--hairline); }
+.strip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.strip-counter {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
 #layers-box { margin-top: 8px; }
 #layers-list {
   margin: 0 0 8px;
@@ -219,7 +281,7 @@ details[open] summary { margin-bottom: 6px; }
   top: -1px;
 }
 
-/* ---- log / hints ------------------------------------------------------- */
+/* ---- log / help link ---------------------------------------------------- */
 
 .panel-foot { padding: 12px 16px 16px; margin-top: auto; }
 .log {
@@ -231,7 +293,14 @@ details[open] summary { margin-bottom: 6px; }
   min-height: 2.6em;
 }
 .log.error { color: #ff9d66; }
-.hints { margin: 0; padding-left: 16px; color: var(--text-dim); font-size: 12px; line-height: 1.7; }
+.help-link {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.help-link:hover:not(:disabled) { color: var(--text); }
 
 /* ---- stage -------------------------------------------------------------- */
 
@@ -268,6 +337,66 @@ details[open] summary { margin-bottom: 6px; }
   border-color: var(--paper-dot);
 }
 .zoombox button:hover { border-color: var(--node-ink); }
+#zoom-help { font-size: 14px; font-family: var(--font-mono); }
+
+/* ---- shortcut sheet -------------------------------------------------------- */
+
+.help-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(20, 22, 28, 0.42);
+}
+.help-card {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
+  padding: 16px 20px 20px;
+  max-width: 720px;
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+}
+.help-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.help-card h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 17px;
+}
+.help-card h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.help-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 18px 26px;
+}
+.help-card dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px 12px;
+  align-items: baseline;
+  font-size: 12.5px;
+}
+.help-card dt { color: var(--text-dim); white-space: nowrap; }
+.help-card dd { margin: 0; }
 
 /* ---- small screens ------------------------------------------------------- */
 
