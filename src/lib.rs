@@ -24,8 +24,9 @@ pub mod rhombic;
 pub mod plotting;
 
 /// Desktop egui explorer. It pulls in `eframe` and spawns worker threads, so
-/// it is excluded from the wasm build (the browser gets [`web`] instead).
-#[cfg(not(target_arch = "wasm32"))]
+/// it is excluded from the wasm build (the browser gets [`web`] instead) and
+/// from `--no-default-features` builds (the headless cluster binary).
+#[cfg(all(not(target_arch = "wasm32"), feature = "gui"))]
 pub mod gui;
 
 /// Browser bindings plus the host-testable [`web::api`] core.

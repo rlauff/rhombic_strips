@@ -96,6 +96,12 @@
 
   <section data-mode="poset" class="compute">
     <h2>Rhombic strips</h2>
+    <div class="backend-switch" role="tablist" aria-label="Compute backend">
+      <button id="backend-wasm" class="active" role="tab" aria-selected="true" title="WebAssembly in this tab — zero setup, single-threaded">Browser</button>
+      <button id="backend-local" role="tab" aria-selected="false" title="Native binary on your machine, all cores">This machine</button>
+      <button id="backend-cluster" role="tab" aria-selected="false" title="srun on the cluster, through your own ssh login">Cluster</button>
+    </div>
+    <p id="backend-status" class="backend-status" hidden></p>
     <label class="check"><input id="cyclic" type="checkbox"> Cyclic strips</label>
     <div class="compute-row">
       <button id="btn-exists" title="Does a rhombic strip exist?">Existence <kbd>X</kbd></button>
@@ -149,6 +155,39 @@
     <button id="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
     <button id="zoom-out" aria-label="Zoom out" title="Zoom out (−)">−</button>
     <button id="zoom-help" aria-label="Keyboard and mouse reference" title="Shortcuts (?)">?</button>
+  </div>
+
+  <div id="remote-overlay" class="help-overlay" hidden>
+    <div class="help-card remote-card" role="dialog" aria-modal="true" aria-label="Compute helper setup">
+      <header>
+        <h3 id="remote-title">Cluster compute</h3>
+        <button id="remote-close" class="small">Esc</button>
+      </header>
+
+      <div id="remote-cluster-fields">
+        <div class="row">
+          <input id="remote-host" type="text" placeholder="you@sshgate.math.tu-berlin.de" spellcheck="false" autocomplete="username">
+        </div>
+        <div class="row">
+          <input id="remote-partition" type="text" placeholder="Slurm partition (optional)" spellcheck="false">
+          <input id="remote-time" type="text" placeholder="time limit, e.g. 01:00:00 (optional)" spellcheck="false">
+        </div>
+      </div>
+
+      <p class="remote-explain" id="remote-explain-cmd"></p>
+      <div class="cmdbox">
+        <pre id="remote-cmd"></pre>
+        <button id="remote-copy" class="small">Copy</button>
+      </div>
+
+      <p class="remote-explain">The helper prints a <strong>pairing code</strong>. Enter it here once — it is remembered for future sessions:</p>
+      <div class="row">
+        <input id="remote-code" type="text" placeholder="pairing code" spellcheck="false" autocomplete="off">
+        <button id="remote-connect">Connect</button>
+      </div>
+      <p id="remote-status" class="remote-status" role="status"></p>
+      <p class="remote-explain dim2">Jobs run under your own account and allocation — nothing is shared. The helper only listens on 127.0.0.1 and stops when you close the terminal; builds are cached in <code>~/.cache/rhombic_strips</code>.</p>
+    </div>
   </div>
 
   <div id="help-overlay" class="help-overlay" hidden>

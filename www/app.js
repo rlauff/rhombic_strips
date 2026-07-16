@@ -163,7 +163,11 @@ function restartWorker() {
 }
 
 function invalidateResults() {
-  if (state.worker && state.job) restartWorker(); 
+  if (state.worker && state.job && !state.job.remote) restartWorker();
+  if (remote.abort) {
+    remote.abort.abort(); // the helper kills the process group on disconnect
+    remote.abort = null;
+  }
   
   stopTicker();
   state.job = null;
@@ -758,7 +762,9 @@ window.addEventListener('keydown', (e) => {
   }
 
   if (e.key === 'Escape') {
-    if (!helpOverlay.hidden) {
+    if (!remoteOverlay.hidden) {
+      remoteOverlay.hidden = true;
+    } else if (!helpOverlay.hidden) {
       showHelp(false);
     } else {
       cancelLink();
@@ -1100,6 +1106,270 @@ $('btn-tikz').addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Remote compute: a native helper on 127.0.0.1 — either strip_stream running
+// on this machine, or srun on the cluster reached through the user's own
+// `ssh -L` tunnel (cluster/serve.sh). The page only ever talks to loopback;
+// ssh authentication and Slurm accounting stay in the user's terminal, so
+// nobody can compute on someone else's allocation. A pairing code (printed
+// by the helper, entered once, kept in localStorage) stops other users on a
+// shared login node — and random web pages probing localhost — from
+// submitting jobs through the relay.
+// ---------------------------------------------------------------------------
+
+const RELAY = 'http://127.0.0.1:8642';
+const ENUM_CAP = 512; // one-shot stream: enumerate stops here (log says so)
+const SERVE_URL =
+  'https://raw.githubusercontent.com/rlauff/rhombic_strips/main/cluster/serve.sh';
+
+const remote = {
+  backend: 'wasm', // 'wasm' | 'local' | 'cluster'
+  token: localStorage.getItem('rhombic.token') || '',
+  host: localStorage.getItem('rhombic.host') || '',
+  partition: localStorage.getItem('rhombic.partition') || '',
+  time: localStorage.getItem('rhombic.time') || '',
+  info: null,   // last successful /ping payload
+  abort: null,  // AbortController of the running remote job
+};
+
+const remoteOverlay = $('remote-overlay');
+const backendStatusEl = $('backend-status');
+
+function saveRemoteSettings() {
+  localStorage.setItem('rhombic.backend', remote.backend);
+  localStorage.setItem('rhombic.token', remote.token);
+  localStorage.setItem('rhombic.host', remote.host);
+  localStorage.setItem('rhombic.partition', remote.partition);
+  localStorage.setItem('rhombic.time', remote.time);
+}
+
+async function pingRelay() {
+  const res = await fetch(`${RELAY}/ping`, {
+    headers: remote.token ? { 'X-Rhombic-Token': remote.token } : {},
+    signal: AbortSignal.timeout(2500),
+  });
+  return await res.json();
+}
+
+function describeRelay(info) {
+  const where = info.mode === 'slurm' ? `slurm @ ${info.host}` : `native @ ${info.host}`;
+  return `${where} · ${info.threads} threads`;
+}
+
+/// Switch the compute backend. Pings the helper for 'local'/'cluster' and, if
+/// interactive, opens the setup dialog when the helper is missing or unpaired.
+async function setBackend(b, interactive = true) {
+  remote.backend = b;
+  saveRemoteSettings();
+  for (const id of ['wasm', 'local', 'cluster']) {
+    const el = $('backend-' + id);
+    el.classList.toggle('active', id === b);
+    el.setAttribute('aria-selected', id === b);
+  }
+  if (b === 'wasm') {
+    backendStatusEl.hidden = true;
+    remote.info = null;
+    return;
+  }
+  backendStatusEl.hidden = false;
+  backendStatusEl.className = 'backend-status';
+  backendStatusEl.textContent = 'looking for the compute helper…';
+  try {
+    const info = await pingRelay();
+    remote.info = info;
+    if (info.paired) {
+      backendStatusEl.className = 'backend-status ok';
+      backendStatusEl.textContent = describeRelay(info);
+    } else {
+      backendStatusEl.className = 'backend-status error';
+      backendStatusEl.textContent = 'helper found — pairing code needed (click here)';
+      if (interactive) openRemoteSetup();
+    }
+  } catch {
+    remote.info = null;
+    backendStatusEl.className = 'backend-status error';
+    backendStatusEl.textContent = 'helper not running — click here for setup';
+    if (interactive) openRemoteSetup();
+  }
+}
+
+$('backend-wasm').addEventListener('click', () => setBackend('wasm'));
+$('backend-local').addEventListener('click', () => setBackend('local'));
+$('backend-cluster').addEventListener('click', () => setBackend('cluster'));
+backendStatusEl.addEventListener('click', () => {
+  if (remote.backend !== 'wasm') openRemoteSetup();
+});
+
+// ---- setup dialog -------------------------------------------------------------
+
+/// The exact command to paste into a terminal. For the cluster this is one
+/// ssh line: your usual login (keys/password/OTP prompt in the terminal) that
+/// simultaneously tunnels the helper's loopback port back to this page.
+function remoteCommand() {
+  if (remote.backend === 'local') {
+    return `curl -fsSL ${SERVE_URL} | bash -s -- --local`;
+  }
+  const host = remote.host.trim() || 'you@sshgate.math.tu-berlin.de';
+  let opts = '';
+  if (remote.partition.trim()) opts += ` --partition=${remote.partition.trim()}`;
+  if (remote.time.trim()) opts += ` --time=${remote.time.trim()}`;
+  return (
+    `ssh -t -L 8642:127.0.0.1:8642 ${host} ` +
+    `'curl -fsSL ${SERVE_URL} | bash -s --${opts}'`
+  );
+}
+
+function renderRemoteSetup() {
+  const cluster = remote.backend === 'cluster';
+  $('remote-title').textContent = cluster ? 'Cluster compute' : 'Compute on this machine';
+  $('remote-cluster-fields').hidden = !cluster;
+  $('remote-explain-cmd').textContent = cluster
+    ? 'Paste this into a terminal. It is your normal ssh login (password or keys stay ' +
+      'in the terminal); on first use it builds the search binary on the cluster, then ' +
+      'runs jobs via srun for as long as the terminal stays open:'
+    : 'Paste this into a terminal on this machine. On first use it builds the native ' +
+      'search binary (all cores, unlike the browser build), then serves it to this ' +
+      'page for as long as the terminal stays open:';
+  $('remote-cmd').textContent = remoteCommand();
+}
+
+function openRemoteSetup() {
+  renderRemoteSetup();
+  $('remote-host').value = remote.host;
+  $('remote-partition').value = remote.partition;
+  $('remote-time').value = remote.time;
+  $('remote-code').value = remote.token;
+  $('remote-status').className = 'remote-status';
+  $('remote-status').textContent = '';
+  remoteOverlay.hidden = false;
+}
+
+for (const [id, key] of [
+  ['remote-host', 'host'],
+  ['remote-partition', 'partition'],
+  ['remote-time', 'time'],
+]) {
+  $(id).addEventListener('input', (e) => {
+    remote[key] = e.target.value;
+    saveRemoteSettings();
+    renderRemoteSetup();
+  });
+}
+
+$('remote-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(remoteCommand());
+    $('remote-copy').textContent = 'Copied';
+    setTimeout(() => { $('remote-copy').textContent = 'Copy'; }, 1200);
+  } catch {
+    $('remote-status').className = 'remote-status error';
+    $('remote-status').textContent = 'Clipboard unavailable — select the command manually.';
+  }
+});
+
+$('remote-connect').addEventListener('click', async () => {
+  remote.token = $('remote-code').value.trim();
+  saveRemoteSettings();
+  const status = $('remote-status');
+  status.className = 'remote-status';
+  status.textContent = 'connecting…';
+  try {
+    const info = await pingRelay();
+    remote.info = info;
+    if (info.paired) {
+      status.className = 'remote-status ok';
+      status.textContent = `Connected: ${describeRelay(info)}`;
+      setBackend(remote.backend, false);
+      setTimeout(() => { remoteOverlay.hidden = true; }, 700);
+    } else {
+      status.className = 'remote-status error';
+      status.textContent = remote.token
+        ? 'Helper is running, but the pairing code does not match.'
+        : 'Helper is running — enter the pairing code it printed.';
+    }
+  } catch {
+    status.className = 'remote-status error';
+    status.textContent = 'No helper on 127.0.0.1:8642 yet — run the command above first.';
+  }
+});
+
+$('remote-close').addEventListener('click', () => { remoteOverlay.hidden = true; });
+remoteOverlay.addEventListener('click', (e) => {
+  if (e.target === remoteOverlay) remoteOverlay.hidden = true;
+});
+
+// ---- remote job runner ----------------------------------------------------------
+
+/// The fetch-streaming twin of the Web Worker: POSTs the job, reads the
+/// chunked NDJSON response line by line, and feeds each message into the same
+/// applyJobMessage the worker path uses. Cancel = abort the fetch; the helper
+/// kills the process group, which also releases a Slurm allocation.
+async function startRemoteJob(kind, wire) {
+  const job = state.job;
+  const ctrl = new AbortController();
+  remote.abort = ctrl;
+  try {
+    const res = await fetch(`${RELAY}/job`, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Rhombic-Token': remote.token,
+      },
+      body: JSON.stringify({
+        graph: wire,
+        cyclic: $('cyclic').checked,
+        mode: kind,
+        cap: kind === 'enumerate' ? ENUM_CAP : 0,
+      }),
+    });
+    if (res.status === 401) {
+      applyJobMessage({ type: 'error', message: 'Not paired with the compute helper.' });
+      openRemoteSetup();
+      return;
+    }
+    if (!res.ok) {
+      applyJobMessage({ type: 'error', message: `Compute helper error: HTTP ${res.status}.` });
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let sawDone = false;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (state.job !== job) { ctrl.abort(); return; } // superseded / cancelled
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const msg = JSON.parse(line);
+        if (msg.type === 'done' || msg.type === 'error') sawDone = true;
+        applyJobMessage(msg);
+      }
+    }
+    if (!sawDone && state.job === job) {
+      applyJobMessage({
+        type: 'error',
+        message: 'The compute helper closed the stream unexpectedly.',
+      });
+    }
+  } catch (err) {
+    if (ctrl.signal.aborted || state.job !== job) return; // user cancelled
+    applyJobMessage({
+      type: 'error',
+      message: `Compute helper unreachable: ${err.message}`,
+    });
+    setBackend(remote.backend, false); // refresh the status line
+  } finally {
+    if (remote.abort === ctrl) remote.abort = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Strip search: worker orchestration (browser twin of gui.rs poll_job)
 // ---------------------------------------------------------------------------
 
@@ -1124,14 +1394,19 @@ function startJob(kind) {
     return;
   }
 
-  state.job = { kind, started: performance.now(), liveCount: 0, idMap };
-  state.worker.postMessage({
-    cmd: 'start',
-    graph: wire,
-    cyclic: $('cyclic').checked,
-    mode: kind,
-    wanted: LOOKAHEAD,
-  });
+  const isRemote = remote.backend !== 'wasm';
+  state.job = { kind, started: performance.now(), liveCount: 0, idMap, remote: isRemote };
+  if (isRemote) {
+    startRemoteJob(kind, wire);
+  } else {
+    state.worker.postMessage({
+      cmd: 'start',
+      graph: wire,
+      cyclic: $('cyclic').checked,
+      mode: kind,
+      wanted: LOOKAHEAD,
+    });
+  }
   log(
     kind === 'exists' ? 'Checking existence…'
     : kind === 'count' ? 'Counting strips…'
@@ -1165,11 +1440,19 @@ function updateJobUi() {
 }
 
 function onWorkerMessage(e) {
-  const msg = e.data;
+  applyJobMessage(e.data);
+}
+
+/// One handler for both transports: Web Worker messages and NDJSON lines
+/// streamed from the native compute helper (see startRemoteJob) — the wire
+/// shapes are identical by construction (src/bin/strip_stream.rs).
+function applyJobMessage(msg) {
   const job = state.job;
   if (!job) return; // stale message from a cancelled job
 
-  if (msg.type === 'strips') {
+  if (msg.type === 'note') {
+    log(msg.message);
+  } else if (msg.type === 'strips') {
     const map = (f) => job.idMap[f];
     for (const s of msg.strips) {
       state.strips.push({
@@ -1200,7 +1483,7 @@ function onWorkerMessage(e) {
     if (job.kind === 'count') {
       log(`${msg.count} rhombic strips (${elapsed(job)}).`);
     } else if (job.kind === 'enumerate') {
-      log(`Enumeration finished: ${msg.count} strips (${elapsed(job)}).`);
+      log(`Enumeration finished: ${msg.count} strips${msg.capped ? ' (capped)' : ''} (${elapsed(job)}).`);
     } else if (msg.count === 0) {
       log(`No rhombic strip exists (${elapsed(job)}).`);
     }
@@ -1220,7 +1503,12 @@ $('btn-exists').addEventListener('click', () => startJob('exists'));
 $('btn-count').addEventListener('click', () => startJob('count'));
 $('btn-enumerate').addEventListener('click', () => startJob('enumerate'));
 $('btn-cancel').addEventListener('click', () => {
-  if (state.worker) state.worker.postMessage({ cmd: 'cancel' });
+  if (remote.abort) {
+    remote.abort.abort();
+    remote.abort = null;
+  } else if (state.worker) {
+    state.worker.postMessage({ cmd: 'cancel' });
+  }
   state.job = null;
   stopTicker();
   updateJobUi();
@@ -1328,6 +1616,10 @@ init()
     state.view.ox = w / 2;
     state.view.oy = h * 0.66;
     log('Ready. Double-click the canvas to add nodes; press ? for all shortcuts.');
+    const savedBackend = localStorage.getItem('rhombic.backend');
+    if (savedBackend === 'local' || savedBackend === 'cluster') {
+      setBackend(savedBackend, false); // reconnects silently if the helper is up
+    }
     refresh();
   })
   .catch((e) => log(`Failed to load the WebAssembly module: ${e}`, true));
