@@ -130,57 +130,73 @@ fn spawn_ticker(counter: Arc<AtomicUsize>, done: Arc<AtomicBool>) -> std::thread
     })
 }
 
-/// Parallel count: `rhombic::count_strips`, unrolled so every found strip
-/// bumps a shared counter the ticker can read.
+/// Parallel count over independent subtrees of the hamiltonian-path DFS
+/// (`Lattice::ham_path_seeds`) — parallelising the path search itself, not
+/// just the extensions. Every found strip bumps a shared counter the ticker
+/// reports once a second.
 fn run_count(l: &Lattice, cyclic: bool, threads: usize) {
-    note(&format!("counting on {} threads…", threads));
+    let seeds = l.ham_path_seeds(cyclic, threads * 16);
+    note(&format!(
+        "counting on {} threads across {} search branches…",
+        threads,
+        seeds.len()
+    ));
     let counter = Arc::new(AtomicUsize::new(0));
     let done = Arc::new(AtomicBool::new(false));
     let ticker = spawn_ticker(counter.clone(), done.clone());
 
     let max_dim = l.dim();
-    let total: usize = if max_dim == 0 {
-        l.ham_paths(cyclic)
-            .map(|_| {
-                counter.fetch_add(1, Ordering::Relaxed);
-                1
-            })
-            .sum()
-    } else {
-        l.ham_paths(cyclic)
-            .par_bridge()
-            .map(|path| {
-                extensions(vec![path], l, max_dim, cyclic)
-                    .map(|_| {
-                        counter.fetch_add(1, Ordering::Relaxed);
-                        1usize
-                    })
-                    .sum::<usize>()
-            })
-            .sum()
-    };
+    let total: usize = seeds
+        .into_par_iter()
+        .map(|paths| {
+            paths
+                .map(|path| {
+                    extensions(vec![path], l, max_dim, cyclic)
+                        .map(|_| {
+                            counter.fetch_add(1, Ordering::Relaxed);
+                            1usize
+                        })
+                        .sum::<usize>()
+                })
+                .sum::<usize>()
+        })
+        .sum();
 
     done.store(true, Ordering::Relaxed);
     let _ = ticker.join();
     emit(&serde_json::json!({"type": "done", "count": total, "capped": false}));
 }
 
-/// Parallel existence: first strip found by any thread, with its skeleton so
-/// the browser can display it (native `strip_exists` only returns a bool).
+/// Parallel existence over DFS seeds: first strip found by any thread, with
+/// its skeleton so the browser can display it (native `strip_exists` only
+/// returns a bool). A shared flag makes the other workers bail out at their
+/// next path instead of finishing their subtree.
 fn run_exists(l: &Lattice, cyclic: bool, threads: usize) {
-    note(&format!("searching on {} threads…", threads));
+    let seeds = l.ham_path_seeds(cyclic, threads * 16);
+    note(&format!(
+        "searching on {} threads across {} search branches…",
+        threads,
+        seeds.len()
+    ));
     let tried = Arc::new(AtomicUsize::new(0));
     let done = Arc::new(AtomicBool::new(false));
     let ticker = spawn_ticker(tried.clone(), done.clone());
 
     let max_dim = l.dim();
-    let found = l
-        .ham_paths(cyclic)
-        .par_bridge()
-        .find_map_any(|path| {
+    let flag = Arc::new(AtomicBool::new(false));
+    let found = seeds.into_par_iter().find_map_any(|paths| {
+        for path in paths {
+            if flag.load(Ordering::Relaxed) {
+                return None; // another worker already found one
+            }
             tried.fetch_add(1, Ordering::Relaxed);
-            extensions(vec![path], l, max_dim, cyclic).next()
-        });
+            if let Some(strip) = extensions(vec![path], l, max_dim, cyclic).next() {
+                flag.store(true, Ordering::Relaxed);
+                return Some(strip);
+            }
+        }
+        None
+    });
 
     done.store(true, Ordering::Relaxed);
     let _ = ticker.join();
