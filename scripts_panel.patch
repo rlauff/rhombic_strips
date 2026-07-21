@@ -1,0 +1,1586 @@
+diff --git a/README.md b/README.md
+index 1395122..11a3b50 100644
+--- a/README.md
++++ b/README.md
+@@ -4,6 +4,24 @@ Rhombic strips of graded posets — a Rust library with three front ends: a CLI
+ (`src/main.rs`), a desktop egui explorer (`src/gui.rs`, `--interactive`), and a
+ browser build (`src/web.rs` → wasm, served from `www/`, built with `./build.sh`).
+ 
++## Scripts
++
++The collapsible **Scripts** panel in the sidebar runs two batch jobs, both
++implemented in Rust (`src/scripts.rs`) and executed as sliceable wasm steppers
++in a dedicated Web Worker:
++
++* **Graph survey** — enumerates all connected graphs on up to *n* vertices
++  (one per isomorphism class, by vertex augmentation with canonical-form
++  deduplication), and checks each tube poset for rhombic strips and/or cyclic
++  strips. Results are visualized as clickable graph thumbnails, optionally
++  grouped by Hamiltonicity, probing the conjecture *Hamilton path ⇒ rhombic
++  strip* (counterexamples would be flagged; the cyclic analogue is known to
++  fail and the failing graphs are listed).
++* **Strip boundaries** — enumerates every linear rhombic strip of the poset
++  in the editor, reads its left and right boundary chains bottom-to-top as
++  permutations (added-token order, e.g. vertex insertion order in a tube
++  poset), and tallies the pairs (start&nbsp;→&nbsp;end) with multiplicities.
++
+ ## Remote & native compute
+ 
+ The web page's strip search normally runs as wasm in the browser tab
+diff --git a/src/lib.rs b/src/lib.rs
+index 14050a8..84b8045 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -31,3 +31,9 @@ pub mod gui;
+ 
+ /// Browser bindings plus the host-testable [`web::api`] core.
+ pub mod web;
++
++/// Batch "scripts" for the browser's Scripts panel: computations over
++/// *families* of objects (all small graphs, all strips of one poset) rather
++/// than a single search on the drawn diagram. Same architecture as [`web`]:
++/// a pure, host-testable core plus thin sliceable `#[wasm_bindgen]` steppers.
++pub mod scripts;
+diff --git a/src/scripts.rs b/src/scripts.rs
+new file mode 100644
+index 0000000..106d70d
+--- /dev/null
++++ b/src/scripts.rs
+@@ -0,0 +1,843 @@
++//! Batch "scripts" behind the browser's *Scripts* panel.
++//!
++//! Unlike everything else in the crate, these do not operate on the single
++//! drawn diagram but on *families* of objects:
++//!
++//! * [`GraphSurvey`] — every connected graph on up to `n` vertices (one per
++//!   isomorphism class), each with Hamilton path/cycle status and rhombic /
++//!   cyclic strip existence for its tube poset. This probes the conjecture
++//!   "Hamilton path ⇒ the tube poset admits a rhombic strip" (the cyclic
++//!   analogue is known to fail).
++//! * [`BoundaryEnumerator`] — every (linear) rhombic strip of one poset,
++//!   reduced to its pair of boundary chains, read bottom-to-top as
++//!   permutations and tallied.
++//!
++//! Architecture mirrors [`crate::web`]: the pure logic lives in [`api`]
++//! (plain Rust, unit-tested on the host), and the `#[wasm_bindgen]` steppers
++//! below expose it to `www/worker.js` with the same `step(budget_ms)`
++//! contract as `web::StripEnumerator`, so long runs stay sliceable,
++//! streamable and cancellable.
++
++use std::collections::HashMap;
++
++use serde::Serialize;
++use wasm_bindgen::prelude::*;
++
++use crate::lattice::Lattice;
++use crate::rhombic::{self, Strip};
++use crate::web::{api as webapi, now_ms};
++
++pub mod api {
++    //! Pure, host-testable implementations.
++
++    use std::collections::HashSet;
++
++    use serde::Serialize;
++
++    use crate::lattice::{Face, FaceId, Lattice};
++    use crate::rhombic;
++    use crate::web::now_ms;
++
++    /// Largest vertex count the survey accepts. Edge bit `i * n + j`
++    /// (for `i < j`) then tops out at `5 * 7 + 6 = 41 < 64`, and the
++    /// canonical-form search over all `n! = 5040` relabelings stays cheap.
++    pub const MAX_SURVEY_N: usize = 7;
++
++    // -----------------------------------------------------------------------
++    // Small graphs as edge bitmasks
++    // -----------------------------------------------------------------------
++
++    fn edge_bit(n: usize, i: usize, j: usize) -> u64 {
++        debug_assert!(i < j && j < n);
++        1u64 << (i * n + j)
++    }
++
++    /// Per-vertex neighbour masks (vertex subsets) of an edge mask.
++    pub fn adjacency(n: usize, mask: u64) -> Vec<u64> {
++        let mut adj = vec![0u64; n];
++        for i in 0..n {
++            for j in (i + 1)..n {
++                if mask & edge_bit(n, i, j) != 0 {
++                    adj[i] |= 1 << j;
++                    adj[j] |= 1 << i;
++                }
++            }
++        }
++        adj
++    }
++
++    /// Is the nonempty vertex subset `sub` connected under `adj`?
++    pub fn subset_connected(sub: u64, adj: &[u64]) -> bool {
++        if sub == 0 {
++            return false;
++        }
++        let mut seen = 1u64 << sub.trailing_zeros();
++        loop {
++            let mut grow = seen;
++            let mut m = seen;
++            while m != 0 {
++                let v = m.trailing_zeros() as usize;
++                m &= m - 1;
++                grow |= adj[v] & sub;
++            }
++            if grow == seen {
++                break;
++            }
++            seen = grow;
++        }
++        seen == sub
++    }
++
++    pub fn graph_connected(n: usize, adj: &[u64]) -> bool {
++        subset_connected((1u64 << n) - 1, adj)
++    }
++
++    /// Does the graph have a Hamilton path? Plain backtracking; n ≤ 7.
++    pub fn ham_path(n: usize, adj: &[u64]) -> bool {
++        fn dfs(v: usize, visited: u64, n: usize, adj: &[u64]) -> bool {
++            if visited.count_ones() as usize == n {
++                return true;
++            }
++            let mut cand = adj[v] & !visited;
++            while cand != 0 {
++                let u = cand.trailing_zeros() as usize;
++                cand &= cand - 1;
++                if dfs(u, visited | (1 << u), n, adj) {
++                    return true;
++                }
++            }
++            false
++        }
++        n == 1 || (0..n).any(|s| dfs(s, 1u64 << s, n, adj))
++    }
++
++    /// Does the graph have a Hamilton cycle? (`false` for n < 3.)
++    pub fn ham_cycle(n: usize, adj: &[u64]) -> bool {
++        if n < 3 {
++            return false;
++        }
++        fn dfs(v: usize, visited: u64, n: usize, adj: &[u64]) -> bool {
++            if visited.count_ones() as usize == n {
++                return adj[v] & 1 != 0; // close up to vertex 0
++            }
++            let mut cand = adj[v] & !visited;
++            while cand != 0 {
++                let u = cand.trailing_zeros() as usize;
++                cand &= cand - 1;
++                if dfs(u, visited | (1 << u), n, adj) {
++                    return true;
++                }
++            }
++            false
++        }
++        // every Hamilton cycle passes through vertex 0
++        dfs(0, 1, n, adj)
++    }
++
++    fn permutations(n: usize) -> Vec<Vec<u8>> {
++        let mut out = vec![vec![]];
++        for k in 0..n as u8 {
++            out = out
++                .into_iter()
++                .flat_map(|p| {
++                    (0..=p.len()).map(move |i| {
++                        let mut q = p.clone();
++                        q.insert(i, k);
++                        q
++                    })
++                })
++                .collect();
++        }
++        out
++    }
++
++    fn relabel(mask: u64, n: usize, p: &[u8]) -> u64 {
++        let mut out = 0;
++        for i in 0..n {
++            for j in (i + 1)..n {
++                if mask & edge_bit(n, i, j) != 0 {
++                    let (a, b) = (p[i] as usize, p[j] as usize);
++                    out |= if a < b { edge_bit(n, a, b) } else { edge_bit(n, b, a) };
++                }
++            }
++        }
++        out
++    }
++
++    /// Canonical form: minimum edge mask over all vertex relabelings.
++    pub fn canonical(mask: u64, n: usize, perms: &[Vec<u8>]) -> u64 {
++        perms.iter().map(|p| relabel(mask, n, p)).min().unwrap_or(0)
++    }
++
++    /// Re-index an edge mask from `from_n`-vertex to `to_n`-vertex layout.
++    fn embed(mask: u64, from_n: usize, to_n: usize) -> u64 {
++        let mut out = 0;
++        for i in 0..from_n {
++            for j in (i + 1)..from_n {
++                if mask & edge_bit(from_n, i, j) != 0 {
++                    out |= edge_bit(to_n, i, j);
++                }
++            }
++        }
++        out
++    }
++
++    pub fn edges_of(mask: u64, n: usize) -> Vec<(u8, u8)> {
++        let mut out = vec![];
++        for i in 0..n {
++            for j in (i + 1)..n {
++                if mask & edge_bit(n, i, j) != 0 {
++                    out.push((i as u8, j as u8));
++                }
++            }
++        }
++        out
++    }
++
++    // -----------------------------------------------------------------------
++    // Tube posets straight from masks
++    // -----------------------------------------------------------------------
++
++    /// The tube poset of the graph (connected vertex subsets under inclusion)
++    /// as a [`Lattice`]. Tubes are ranked by `|tube| - 1`, so the singletons
++    /// form level 0; covers add one neighbouring vertex. Face labels are the
++    /// vertex digits, matching `web::api::gen_tube_poset` for ≤ 10 vertices.
++    pub fn tube_poset(n: usize, adj: &[u64]) -> Lattice {
++        let full = (1u64 << n) - 1;
++        let mut subs: Vec<u64> = (1..=full).filter(|&m| subset_connected(m, adj)).collect();
++        subs.sort_by_key(|m| (m.count_ones(), *m));
++        let idx: std::collections::HashMap<u64, FaceId> =
++            subs.iter().enumerate().map(|(i, &m)| (m, i)).collect();
++
++        let mut upsets: Vec<Vec<FaceId>> = vec![vec![]; subs.len()];
++        let mut downsets: Vec<Vec<FaceId>> = vec![vec![]; subs.len()];
++        for (i, &a) in subs.iter().enumerate() {
++            // covers of a tube: add one vertex adjacent to it (anything else
++            // disconnects); the result is connected again, hence a tube.
++            let mut nb = 0u64;
++            let mut m = a;
++            while m != 0 {
++                let v = m.trailing_zeros() as usize;
++                m &= m - 1;
++                nb |= adj[v];
++            }
++            let mut cand = nb & !a & full;
++            while cand != 0 {
++                let v = cand.trailing_zeros();
++                cand &= cand - 1;
++                let j = idx[&(a | (1u64 << v))];
++                upsets[i].push(j);
++                downsets[j].push(i);
++            }
++        }
++
++        let label = |m: u64| -> String {
++            (0..n).filter(|&v| m & (1 << v) != 0).map(|v| v.to_string()).collect()
++        };
++        let faces = subs
++            .iter()
++            .enumerate()
++            .map(|(i, &m)| {
++                Face::new(
++                    label(m),
++                    m.count_ones() as usize - 1,
++                    std::mem::take(&mut upsets[i]),
++                    std::mem::take(&mut downsets[i]),
++                )
++            })
++            .collect();
++        Lattice::from_faces(faces)
++    }
++
++    // -----------------------------------------------------------------------
++    // Graph survey
++    // -----------------------------------------------------------------------
++
++    #[derive(Serialize, Clone)]
++    #[serde(rename_all = "camelCase")]
++    pub struct GraphResult {
++        pub n: usize,
++        pub edges: Vec<(u8, u8)>,
++        pub ham_path: bool,
++        pub ham_cycle: bool,
++        /// Tube poset admits a rhombic strip; absent if unchecked.
++        #[serde(skip_serializing_if = "Option::is_none")]
++        pub strip: Option<bool>,
++        /// Tube poset admits a cyclic rhombic strip; absent if unchecked.
++        #[serde(skip_serializing_if = "Option::is_none")]
++        pub cyclic_strip: Option<bool>,
++        pub tubes: usize,
++    }
++
++    #[derive(Serialize)]
++    #[serde(rename_all = "camelCase")]
++    pub struct SurveyStep {
++        /// Results that became available during this step only.
++        pub results: Vec<GraphResult>,
++        /// "generate" while enumerating isomorphism classes, then "check".
++        pub phase: &'static str,
++        /// Vertex count currently being generated (generate phase).
++        pub level: usize,
++        pub checked: usize,
++        /// Number of connected graphs to check; 0 until generation is done.
++        pub total: usize,
++        pub done: bool,
++    }
++
++    enum Phase {
++        /// Building `levels[gen_level]` by vertex augmentation.
++        Generate,
++        /// Working through `targets`.
++        Check,
++        Done,
++    }
++
++    /// Incremental survey over all connected graphs on 2..=max_n vertices,
++    /// one representative per isomorphism class.
++    ///
++    /// Graphs are generated by vertex augmentation: every graph on `k`
++    /// vertices arises from one on `k - 1` (delete any vertex), so extending
++    /// each (k-1)-class by a new vertex with every neighbour subset —
++    /// including the empty one, disconnected graphs are needed as parents —
++    /// and deduplicating canonical forms yields every class exactly once.
++    pub struct SurveyCore {
++        max_n: usize,
++        check_linear: bool,
++        check_cyclic: bool,
++
++        // generation state
++        levels: Vec<Vec<u64>>, // levels[k]: all k-vertex classes (incl. disconnected)
++        gen_level: usize,
++        gen_parent: usize,
++        gen_subset: u64,
++        perms: Vec<Vec<u8>>, // permutations of 0..gen_level
++        seen: HashSet<u64>,
++        next_level: Vec<u64>,
++
++        // check state
++        targets: Vec<(usize, u64)>, // (n, edge mask), connected only
++        next_target: usize,
++
++        phase: Phase,
++    }
++
++    impl SurveyCore {
++        pub fn new(max_n: usize, check_linear: bool, check_cyclic: bool) -> Result<Self, String> {
++            if !(2..=MAX_SURVEY_N).contains(&max_n) {
++                return Err(format!("n must be between 2 and {}.", MAX_SURVEY_N));
++            }
++            Ok(SurveyCore {
++                max_n,
++                check_linear,
++                check_cyclic,
++                levels: vec![vec![], vec![0u64]], // the single 1-vertex graph
++                gen_level: 2,
++                gen_parent: 0,
++                gen_subset: 0,
++                perms: permutations(2),
++                seen: HashSet::new(),
++                next_level: vec![],
++                targets: vec![],
++                next_target: 0,
++                phase: Phase::Generate,
++            })
++        }
++
++        /// Advance for at most `budget_ms`; the budget is checked between
++        /// candidates/graphs, so one very hard strip search can overshoot it
++        /// (cancellation still works — the worker is simply terminated).
++        pub fn step(&mut self, budget_ms: f64) -> SurveyStep {
++            let deadline = now_ms() + budget_ms;
++            let mut fresh = vec![];
++
++            loop {
++                match self.phase {
++                    Phase::Generate => self.generate_one(),
++                    Phase::Check => {
++                        if let Some(r) = self.check_one() {
++                            fresh.push(r);
++                        }
++                    }
++                    Phase::Done => break,
++                }
++                if now_ms() >= deadline {
++                    break;
++                }
++            }
++
++            SurveyStep {
++                results: fresh,
++                phase: match self.phase {
++                    Phase::Generate => "generate",
++                    _ => "check",
++                },
++                level: self.gen_level.min(self.max_n),
++                checked: self.next_target,
++                total: self.targets.len(),
++                done: matches!(self.phase, Phase::Done),
++            }
++        }
++
++        /// Process one augmentation candidate, advancing the cursor; on level
++        /// completion, finalise it and either start the next level or switch
++        /// to the check phase.
++        fn generate_one(&mut self) {
++            let k = self.gen_level;
++            let parent = self.levels[k - 1][self.gen_parent];
++            let mut child = embed(parent, k - 1, k);
++            let mut s = self.gen_subset;
++            while s != 0 {
++                let v = s.trailing_zeros() as usize;
++                s &= s - 1;
++                child |= edge_bit(k, v, k - 1);
++            }
++            let canon = canonical(child, k, &self.perms);
++            if self.seen.insert(canon) {
++                self.next_level.push(canon);
++            }
++
++            // advance (subset-minor, parent-major)
++            self.gen_subset += 1;
++            if self.gen_subset == 1u64 << (k - 1) {
++                self.gen_subset = 0;
++                self.gen_parent += 1;
++                if self.gen_parent == self.levels[k - 1].len() {
++                    // level complete
++                    self.next_level.sort_unstable();
++                    self.levels.push(std::mem::take(&mut self.next_level));
++                    self.seen.clear();
++                    self.gen_parent = 0;
++                    self.gen_level += 1;
++                    if self.gen_level > self.max_n {
++                        self.collect_targets();
++                        self.phase = Phase::Check;
++                    } else {
++                        self.perms = permutations(self.gen_level);
++                    }
++                }
++            }
++        }
++
++        /// Connected classes only, sparse graphs first — their tube posets
++        /// are small, so results stream in from easy to hard.
++        fn collect_targets(&mut self) {
++            for n in 2..=self.max_n {
++                for &mask in &self.levels[n] {
++                    if graph_connected(n, &adjacency(n, mask)) {
++                        self.targets.push((n, mask));
++                    }
++                }
++            }
++            self.targets.sort_by_key(|&(n, mask)| (n, mask.count_ones()));
++        }
++
++        fn check_one(&mut self) -> Option<GraphResult> {
++            if self.next_target == self.targets.len() {
++                self.phase = Phase::Done;
++                return None;
++            }
++            let (n, mask) = self.targets[self.next_target];
++            self.next_target += 1;
++
++            let adj = adjacency(n, mask);
++            let lat = tube_poset(n, &adj);
++            Some(GraphResult {
++                n,
++                edges: edges_of(mask, n),
++                ham_path: ham_path(n, &adj),
++                ham_cycle: ham_cycle(n, &adj),
++                strip: self
++                    .check_linear
++                    .then(|| rhombic::strips(&lat, false).next().is_some()),
++                cyclic_strip: self
++                    .check_cyclic
++                    .then(|| rhombic::strips(&lat, true).next().is_some()),
++                tubes: lat.num_faces(),
++            })
++        }
++    }
++
++    // -----------------------------------------------------------------------
++    // Boundary chains → permutations
++    // -----------------------------------------------------------------------
++
++    /// Read a maximal chain (bottom to top) as a permutation, when the labels
++    /// support it: labels are tokenised (comma-split if any comma, else into
++    /// characters); if the bottom is a single token and every cover adds
++    /// exactly one token, the sequence of added tokens *is* the permutation
++    /// (e.g. tube posets: the order in which vertices join the tube).
++    /// Otherwise the chain of labels itself is returned, joined by " < ".
++    pub fn chain_to_perm(labels: &[String]) -> String {
++        // Tokenisation is decided once per chain: if any label contains a
++        // comma, all labels are comma-separated token lists (a comma-free
++        // label is then a single token — e.g. a singleton tube "v1");
++        // otherwise every character is a token.
++        let comma_mode = labels.iter().any(|l| l.contains(','));
++        let tokens = |label: &str| -> Vec<String> {
++            if comma_mode {
++                label
++                    .split(',')
++                    .map(str::trim)
++                    .filter(|s| !s.is_empty())
++                    .map(String::from)
++                    .collect()
++            } else {
++                label.chars().map(String::from).collect()
++            }
++        };
++
++        let fallback = || labels.join(" < ");
++        let Some(first) = labels.first() else {
++            return String::new();
++        };
++        let first = tokens(first);
++        if first.len() != 1 {
++            return fallback();
++        }
++        let mut seq = vec![first[0].clone()];
++        for w in labels.windows(2) {
++            let mut lower = tokens(&w[0]);
++            let upper = tokens(&w[1]);
++            if upper.len() != lower.len() + 1 {
++                return fallback();
++            }
++            // multiset difference upper \ lower; must be a single token
++            let mut added: Option<String> = None;
++            for t in upper {
++                if let Some(pos) = lower.iter().position(|x| *x == t) {
++                    lower.remove(pos);
++                } else if added.is_none() {
++                    added = Some(t);
++                } else {
++                    return fallback();
++                }
++            }
++            if !lower.is_empty() {
++                return fallback();
++            }
++            match added {
++                Some(t) => seq.push(t),
++                None => return fallback(),
++            }
++        }
++        if seq.iter().all(|t| t.chars().count() == 1) {
++            seq.concat()
++        } else {
++            seq.join(",")
++        }
++    }
++}
++
++// ===========================================================================
++// wasm-bindgen steppers (same step/budget contract as web::StripEnumerator)
++// ===========================================================================
++
++/// Sliceable survey over all connected graphs on ≤ n vertices.
++#[wasm_bindgen]
++pub struct GraphSurvey {
++    core: api::SurveyCore,
++}
++
++#[wasm_bindgen]
++impl GraphSurvey {
++    #[wasm_bindgen(constructor)]
++    pub fn new(max_n: usize, check_linear: bool, check_cyclic: bool) -> Result<GraphSurvey, JsValue> {
++        api::SurveyCore::new(max_n, check_linear, check_cyclic)
++            .map(|core| GraphSurvey { core })
++            .map_err(|e| JsValue::from_str(&e))
++    }
++
++    /// Advance for about `budget_ms`. Returns JSON (see [`api::SurveyStep`]).
++    pub fn step(&mut self, budget_ms: f64) -> String {
++        serde_json::to_string(&self.core.step(budget_ms)).expect("SurveyStep serializes")
++    }
++}
++
++#[derive(Serialize)]
++#[serde(rename_all = "camelCase")]
++struct PairOut {
++    left: String,
++    right: String,
++    count: usize,
++}
++
++#[derive(Serialize)]
++#[serde(rename_all = "camelCase")]
++struct BoundaryStep {
++    /// Full tally so far, sorted by count (desc), then lexicographically.
++    pairs: Vec<PairOut>,
++    /// Strips enumerated so far.
++    count: usize,
++    distinct: usize,
++    done: bool,
++}
++
++/// Enumerates all linear rhombic strips of one poset and tallies the pairs
++/// (left boundary, right boundary), each boundary chain read bottom-to-top
++/// as a permutation (see [`api::chain_to_perm`]).
++///
++/// Cyclic strips have no boundary, so this is inherently non-cyclic.
++/// Lattice ownership follows `web::StripEnumerator`: leaked so the borrowing
++/// iterator can live alongside, reclaimed in `Drop`.
++#[wasm_bindgen]
++pub struct BoundaryEnumerator {
++    lattice: *mut Lattice,
++    iter: Option<Box<dyn Iterator<Item = Strip>>>,
++    pairs: HashMap<(String, String), usize>,
++    count: usize,
++    done: bool,
++}
++
++#[wasm_bindgen]
++impl BoundaryEnumerator {
++    #[wasm_bindgen(constructor)]
++    pub fn new(graph_json: &str) -> Result<BoundaryEnumerator, JsValue> {
++        Self::create(graph_json).map_err(|e| JsValue::from_str(&e))
++    }
++
++    /// Advance for about `budget_ms`. Returns JSON (see [`BoundaryStep`]).
++    pub fn step(&mut self, budget_ms: f64) -> String {
++        let deadline = now_ms() + budget_ms;
++        if !self.done {
++            // SAFETY: see `create` — the lattice outlives every borrow here.
++            let l: &Lattice = unsafe { &*self.lattice };
++            let iter = self.iter.as_mut().expect("iterator present until done");
++            loop {
++                match iter.next() {
++                    Some(strip) => {
++                        let chain = |pick: fn(&[usize]) -> usize| -> Vec<String> {
++                            strip
++                                .iter()
++                                .map(|layer| l.face(pick(layer)).label().to_string())
++                                .collect()
++                        };
++                        let left = api::chain_to_perm(&chain(|layer| layer[0]));
++                        let right =
++                            api::chain_to_perm(&chain(|layer| *layer.last().unwrap()));
++                        *self.pairs.entry((left, right)).or_insert(0) += 1;
++                        self.count += 1;
++                    }
++                    None => {
++                        self.done = true;
++                        self.iter = None; // release the borrow eagerly
++                        break;
++                    }
++                }
++                if now_ms() >= deadline {
++                    break;
++                }
++            }
++        }
++
++        let mut pairs: Vec<PairOut> = self
++            .pairs
++            .iter()
++            .map(|((left, right), &count)| PairOut {
++                left: left.clone(),
++                right: right.clone(),
++                count,
++            })
++            .collect();
++        pairs.sort_by(|a, b| {
++            b.count
++                .cmp(&a.count)
++                .then_with(|| a.left.cmp(&b.left))
++                .then_with(|| a.right.cmp(&b.right))
++        });
++        let out = BoundaryStep {
++            distinct: pairs.len(),
++            pairs,
++            count: self.count,
++            done: self.done,
++        };
++        serde_json::to_string(&out).expect("BoundaryStep serializes")
++    }
++}
++
++impl BoundaryEnumerator {
++    fn create(graph_json: &str) -> Result<Self, String> {
++        let g = webapi::WireGraph::parse(graph_json)?;
++        let faces = webapi::wire_to_faces(&g)?;
++        let lattice: *mut Lattice = Box::into_raw(Box::new(Lattice::from_faces(faces)));
++        // SAFETY: the iterator borrows the leaked lattice; it is dropped
++        // before the lattice in `Drop`, and `lattice` is never moved.
++        let iter: Box<dyn Iterator<Item = Strip>> =
++            Box::new(rhombic::strips(unsafe { &*lattice }, false));
++        Ok(BoundaryEnumerator {
++            lattice,
++            iter: Some(iter),
++            pairs: HashMap::new(),
++            count: 0,
++            done: false,
++        })
++    }
++}
++
++impl Drop for BoundaryEnumerator {
++    fn drop(&mut self) {
++        self.iter = None; // the borrower goes first
++        if !self.lattice.is_null() {
++            // SAFETY: allocated with Box::into_raw in `create`, dropped once.
++            unsafe { drop(Box::from_raw(self.lattice)) };
++            self.lattice = std::ptr::null_mut();
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::api::*;
++    use super::*;
++
++    fn run_survey(max_n: usize, linear: bool, cyclic: bool) -> Vec<GraphResult> {
++        let mut core = SurveyCore::new(max_n, linear, cyclic).expect("survey builds");
++        let mut results = vec![];
++        loop {
++            let step = core.step(f64::INFINITY);
++            results.extend(step.results);
++            if step.done {
++                assert_eq!(step.checked, step.total);
++                return results;
++            }
++        }
++    }
++
++    #[test]
++    fn survey_counts_match_oeis() {
++        // Connected graphs up to isomorphism (OEIS A001349): 1, 2, 6, 21, 112.
++        let results = run_survey(6, false, false);
++        let count = |n| results.iter().filter(|r| r.n == n).count();
++        assert_eq!(count(2), 1);
++        assert_eq!(count(3), 2);
++        assert_eq!(count(4), 6);
++        assert_eq!(count(5), 21);
++        assert_eq!(count(6), 112);
++    }
++
++    #[test]
++    fn hamiltonicity_spot_checks() {
++        // path P4: Hamilton path, no cycle
++        let p4 = adjacency(4, {
++            let e = edges_to_mask(4, &[(0, 1), (1, 2), (2, 3)]);
++            e
++        });
++        assert!(ham_path(4, &p4) && !ham_cycle(4, &p4));
++        // cycle C4: both
++        let c4 = adjacency(4, edges_to_mask(4, &[(0, 1), (1, 2), (2, 3), (0, 3)]));
++        assert!(ham_path(4, &c4) && ham_cycle(4, &c4));
++        // star K_{1,3}: neither
++        let star = adjacency(4, edges_to_mask(4, &[(0, 1), (0, 2), (0, 3)]));
++        assert!(!ham_path(4, &star) && !ham_cycle(4, &star));
++    }
++
++    fn edges_to_mask(n: usize, edges: &[(usize, usize)]) -> u64 {
++        let mut m = 0;
++        for &(a, b) in edges {
++            let (a, b) = if a < b { (a, b) } else { (b, a) };
++            m |= 1u64 << (a * n + b);
++        }
++        m
++    }
++
++    #[test]
++    fn tube_poset_of_p3_matches_web_generator() {
++        // Same graph through both code paths: scripts::api::tube_poset and
++        // web::api::gen_tube_poset must agree on faces per level.
++        let adj = adjacency(3, edges_to_mask(3, &[(0, 1), (1, 2)]));
++        let lat = tube_poset(3, &adj);
++        assert_eq!(lat.num_faces(), 6); // {0},{1},{2},{01},{12},{012}
++        assert_eq!(lat.level(0).len(), 3);
++        assert_eq!(lat.level(1).len(), 2);
++        assert_eq!(lat.level(2).len(), 1);
++
++        let via_web = crate::web::api::gen_tube_poset(
++            &crate::web::api::gen_graph("path", 3).unwrap(),
++        )
++        .unwrap();
++        let g = crate::web::api::WireGraph::parse(&via_web).unwrap();
++        assert_eq!(g.labels.len(), lat.num_faces());
++        assert_eq!(
++            g.edges.len(),
++            lat.faces().map(|(_, f)| f.upset().len()).sum::<usize>()
++        );
++    }
++
++    #[test]
++    fn survey_small_graphs_strip_results() {
++        let results = run_survey(3, true, true);
++        assert_eq!(results.len(), 3); // K2, P3, K3
++        for r in &results {
++            // Level 0 of the tube poset is the graph itself (singletons are
++            // bridged iff adjacent), so a strip forces a Hamilton path...
++            if r.strip == Some(true) {
++                assert!(r.ham_path);
++            }
++            // ...and on ≤ 3 vertices the conjectured converse holds too.
++            if r.ham_path {
++                assert_eq!(r.strip, Some(true));
++            }
++        }
++        // K3: Hamilton cycle and a cyclic strip.
++        let k3 = results.iter().find(|r| r.n == 3 && r.edges.len() == 3).unwrap();
++        assert!(k3.ham_cycle);
++        assert_eq!(k3.cyclic_strip, Some(true));
++    }
++
++    #[test]
++    fn chain_to_perm_tokenises_and_falls_back() {
++        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
++        // single-char tokens concatenate
++        assert_eq!(chain_to_perm(&s(&["0", "01", "012"])), "012");
++        assert_eq!(chain_to_perm(&s(&["2", "12", "012"])), "210");
++        // comma-mode chains with single-char tokens still concatenate
++        assert_eq!(chain_to_perm(&s(&["b", "a,b", "a,b,c"])), "bac");
++        // multi-char tokens join with commas
++        assert_eq!(chain_to_perm(&s(&["v1", "v1,v2", "v1,v2,v3"])), "v1,v2,v3");
++        // cube-style labels don't add tokens: fall back to the chain
++        assert_eq!(chain_to_perm(&s(&["00", "0*", "**"])), "00 < 0* < **");
++    }
++
++    #[test]
++    fn boundary_pairs_of_p3_tube_poset() {
++        // Tube poset of the path 0-1-2 has exactly one strip:
++        // [0,1,2] / [01,12] / [012]; boundaries 0<01<012 and 2<12<012.
++        let g = crate::web::api::gen_tube_poset(
++            &crate::web::api::gen_graph("path", 3).unwrap(),
++        )
++        .unwrap();
++        let mut en = BoundaryEnumerator::create(&g).expect("enumerator builds");
++        let out: serde_json::Value =
++            serde_json::from_str(&en.step(f64::INFINITY)).unwrap();
++        assert_eq!(out["done"], true);
++        assert_eq!(out["count"], 1);
++        assert_eq!(out["distinct"], 1);
++        assert_eq!(out["pairs"][0]["left"], "012");
++        assert_eq!(out["pairs"][0]["right"], "210");
++        assert_eq!(out["pairs"][0]["count"], 1);
++    }
++
++    #[test]
++    fn boundary_counts_sum_to_strip_count() {
++        // Boolean lattice B3 (simplex face lattice): pair counts must sum to
++        // the total number of strips reported by the sequential search.
++        let g = crate::web::api::gen_simplex(2).unwrap(); // subsets of {0,1,2}
++        let faces =
++            crate::web::api::wire_to_faces(&crate::web::api::WireGraph::parse(&g).unwrap())
++                .unwrap();
++        let lat = crate::lattice::Lattice::from_faces(faces);
++        let total = crate::rhombic::strips(&lat, false).count();
++        assert!(total > 0);
++
++        let mut en = BoundaryEnumerator::create(&g).expect("enumerator builds");
++        let out: serde_json::Value =
++            serde_json::from_str(&en.step(f64::INFINITY)).unwrap();
++        assert_eq!(out["count"], total as u64);
++        let sum: u64 = out["pairs"]
++            .as_array()
++            .unwrap()
++            .iter()
++            .map(|p| p["count"].as_u64().unwrap())
++            .sum();
++        assert_eq!(sum, total as u64);
++    }
++}
+diff --git a/src/web.rs b/src/web.rs
+index 6cbadcb..4efd262 100644
+--- a/src/web.rs
++++ b/src/web.rs
+@@ -769,12 +769,12 @@ impl Drop for StripEnumerator {
+ }
+ 
+ #[cfg(target_arch = "wasm32")]
+-fn now_ms() -> f64 {
++pub(crate) fn now_ms() -> f64 {
+     js_sys::Date::now()
+ }
+ 
+ #[cfg(not(target_arch = "wasm32"))]
+-fn now_ms() -> f64 {
++pub(crate) fn now_ms() -> f64 {
+     use std::time::{SystemTime, UNIX_EPOCH};
+     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64() * 1000.0
+ }
+diff --git a/www/app.js b/www/app.js
+index d39f5d2..8336a7b 100644
+--- a/www/app.js
++++ b/www/app.js
+@@ -1601,6 +1601,380 @@ $('btn-copy-layers').addEventListener('click', async () => {
+   }
+ });
+ 
++// ---------------------------------------------------------------------------
++// Scripts panel: batch jobs in a dedicated worker (src/scripts.rs). Uses its
++// own Worker instance so a running script never fights the strip search over
++// one thread; cancellation terminates the worker (same rationale as strips).
++// Script jobs survive diagram edits: the survey is independent of the editor,
++// and the boundary job snapshots the poset when it starts.
++// ---------------------------------------------------------------------------
++
++const scripts = {
++  worker: null,
++  job: null, // {kind: 'survey' | 'bounds', started}
++  survey: { results: [], opts: null, done: false },
++  bounds: { pairs: [], count: 0, distinct: 0, done: false },
++};
++
++function scriptWorker() {
++  if (!scripts.worker) {
++    scripts.worker = new Worker(new URL('./worker.js', import.meta.url), {
++      type: 'module',
++    });
++    scripts.worker.onmessage = (e) => onScriptMessage(e.data);
++  }
++  return scripts.worker;
++}
++
++function cancelScript(quiet = false) {
++  if (scripts.worker) {
++    // terminate, don't post: one script step can take arbitrarily long
++    // (a single hard strip-existence search), so a 'cancel' message might
++    // never be seen. A fresh worker is created lazily on the next run.
++    scripts.worker.terminate();
++    scripts.worker = null;
++  }
++  if (scripts.job) {
++    scripts.job = null;
++    updateScriptJobUi('');
++    if (!quiet) log('Script cancelled.');
++  }
++}
++
++function updateScriptJobUi(status) {
++  $('script-job').hidden = !scripts.job;
++  if (scripts.job && status !== undefined) {
++    $('script-status').textContent = status;
++  }
++}
++
++function scriptElapsed() {
++  return `${((performance.now() - scripts.job.started) / 1000).toFixed(1)}s`;
++}
++
++// ---- tabs -----------------------------------------------------------------
++
++function setScriptTab(kind) {
++  const survey = kind === 'survey';
++  $('script-tab-survey').classList.toggle('active', survey);
++  $('script-tab-bounds').classList.toggle('active', !survey);
++  $('script-tab-survey').setAttribute('aria-selected', survey);
++  $('script-tab-bounds').setAttribute('aria-selected', !survey);
++  $('script-survey-opts').hidden = !survey;
++  $('script-bounds-opts').hidden = survey;
++  renderSurvey();
++  renderBounds();
++}
++
++$('script-tab-survey').addEventListener('click', () => setScriptTab('survey'));
++$('script-tab-bounds').addEventListener('click', () => setScriptTab('bounds'));
++
++// ---- run ------------------------------------------------------------------
++
++$('btn-run-survey').addEventListener('click', () => {
++  const n = Math.min(7, Math.max(2, parseInt($('survey-n').value, 10) || 5));
++  $('survey-n').value = n;
++  const linear = $('survey-linear').checked;
++  const cyclic = $('survey-cyclic').checked;
++  cancelScript(true);
++  scripts.survey = { results: [], opts: { n, linear, cyclic }, done: false };
++  scripts.job = { kind: 'survey', started: performance.now() };
++  scriptWorker().postMessage({ cmd: 'survey', maxN: n, linear, cyclic });
++  updateScriptJobUi('generating graphs …');
++  renderSurvey();
++  log(`Surveying all connected graphs on ≤ ${n} vertices…`);
++});
++
++$('btn-run-bounds').addEventListener('click', () => {
++  if (state.mode !== 'poset') {
++    log('Strip boundaries runs on a poset — switch to poset mode.', true);
++    return;
++  }
++  const { wire } = toWire();
++  if (wire.labels.length === 0) {
++    log('The diagram is empty.', true);
++    return;
++  }
++  try {
++    poset_ranks(JSON.stringify(wire)); // early cycle check with a clear error
++  } catch (e) {
++    log(String(e), true);
++    return;
++  }
++  cancelScript(true);
++  scripts.bounds = { pairs: [], count: 0, distinct: 0, done: false };
++  scripts.job = { kind: 'bounds', started: performance.now() };
++  scriptWorker().postMessage({ cmd: 'bounds', graph: wire });
++  updateScriptJobUi('enumerating strips …');
++  renderBounds();
++  log('Enumerating strip boundaries…');
++});
++
++$('btn-script-cancel').addEventListener('click', () => cancelScript());
++
++// ---- messages -------------------------------------------------------------
++
++function onScriptMessage(msg) {
++  const job = scripts.job;
++  if (!job) return; // stale message from a cancelled job
++
++  if (msg.type === 'error') {
++    log(msg.message, true);
++    scripts.job = null;
++    updateScriptJobUi('');
++    return;
++  }
++
++  if (msg.type === 'survey' && job.kind === 'survey') {
++    const st = scripts.survey;
++    if (msg.results.length) st.results.push(...msg.results);
++    st.done = msg.done;
++    updateScriptJobUi(
++      msg.phase === 'generate'
++        ? `generating graphs (n=${msg.level}) … (${scriptElapsed()})`
++        : `checked ${msg.checked}/${msg.total} … (${scriptElapsed()})`
++    );
++    if (msg.results.length || msg.done) renderSurvey();
++    if (msg.done) {
++      log(`Survey finished: ${st.results.length} graphs (${scriptElapsed()}).`);
++      scripts.job = null;
++      updateScriptJobUi('');
++    }
++  } else if (msg.type === 'bounds' && job.kind === 'bounds') {
++    scripts.bounds = {
++      pairs: msg.pairs,
++      count: msg.count,
++      distinct: msg.distinct,
++      done: msg.done,
++    };
++    updateScriptJobUi(
++      `${msg.count} strips · ${msg.distinct} pairs … (${scriptElapsed()})`
++    );
++    renderBounds();
++    if (msg.done) {
++      log(
++        `Boundary enumeration finished: ${msg.count} strips, ` +
++          `${msg.distinct} boundary pairs (${scriptElapsed()}).`
++      );
++      scripts.job = null;
++      updateScriptJobUi('');
++    }
++  }
++}
++
++// ---- survey rendering -----------------------------------------------------
++
++const mark = (v) => (v === true ? '✓' : v === false ? '✗' : '·');
++
++function graphThumbSvg(r) {
++  const s = 56;
++  const cx = s / 2, cy = s / 2, rad = 19;
++  const pts = Array.from({ length: r.n }, (_, i) => {
++    const a = (2 * Math.PI * i) / r.n - Math.PI / 2;
++    return [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
++  });
++  const f = (x) => x.toFixed(1);
++  let svg = `<svg viewBox="0 0 ${s} ${s}" aria-hidden="true">`;
++  for (const [a, b] of r.edges) {
++    svg +=
++      `<line x1="${f(pts[a][0])}" y1="${f(pts[a][1])}" ` +
++      `x2="${f(pts[b][0])}" y2="${f(pts[b][1])}" ` +
++      `stroke="currentColor" stroke-width="1.4"/>`;
++  }
++  for (const [x, y] of pts) {
++    svg += `<circle cx="${f(x)}" cy="${f(y)}" r="2.6" fill="currentColor"/>`;
++  }
++  return svg + '</svg>';
++}
++
++function surveyCard(r) {
++  const opts = scripts.survey.opts ?? {};
++  const card = document.createElement('button');
++  card.type = 'button';
++  card.className = 'g-card';
++  const cex = r.hamPath && r.strip === false; // conjecture counterexample
++  if (cex) card.classList.add('cex');
++
++  let dots = '';
++  if (opts.linear) {
++    dots += `<span class="g-dot ${r.strip ? 'ok' : 'bad'}" title="rhombic strip ${mark(r.strip)}"></span>`;
++  }
++  if (opts.cyclic) {
++    dots += `<span class="g-dot cyc ${r.cyclicStrip ? 'ok' : 'bad'}" title="cyclic strip ${mark(r.cyclicStrip)}"></span>`;
++  }
++
++  card.title =
++    `n=${r.n} · ${r.edges.length} edges · ${r.tubes} tubes · ` +
++    `Ham path ${mark(r.hamPath)} · Ham cycle ${mark(r.hamCycle)}` +
++    (opts.linear ? ` · strip ${mark(r.strip)}` : '') +
++    (opts.cyclic ? ` · cyclic strip ${mark(r.cyclicStrip)}` : '') +
++    (cex ? ' — COUNTEREXAMPLE' : '') +
++    '\nClick to open in the graph editor.';
++  card.innerHTML =
++    graphThumbSvg(r) + (dots ? `<span class="g-dots">${dots}</span>` : '');
++  card.addEventListener('click', () => {
++    const wire = {
++      labels: Array.from({ length: r.n }, (_, i) => String(i)),
++      edges: r.edges,
++    };
++    replaceGraph(
++      wire,
++      'graph',
++      `Survey graph: n=${r.n}, ${r.edges.length} edges — ` +
++        `Ham path ${mark(r.hamPath)}, Ham cycle ${mark(r.hamCycle)}` +
++        (opts.linear ? `, strip ${mark(r.strip)}` : '') +
++        (opts.cyclic ? `, cyclic ${mark(r.cyclicStrip)}` : '') + '.',
++      'circle'
++    );
++  });
++  return card;
++}
++
++function surveyGroupStats(rs, opts) {
++  const bits = [`${rs.length}`];
++  if (opts.linear) {
++    bits.push(`strip ${rs.filter((r) => r.strip === true).length}/${rs.length}`);
++  }
++  if (opts.cyclic) {
++    bits.push(
++      `cyclic ${rs.filter((r) => r.cyclicStrip === true).length}/${rs.length}`
++    );
++  }
++  return bits.join(' · ');
++}
++
++function renderSurvey() {
++  const el = $('survey-results');
++  const st = scripts.survey;
++  const active = !$('script-survey-opts').hidden;
++  el.hidden = !active || st.results.length === 0;
++  el.innerHTML = '';
++  if (el.hidden) return;
++
++  const opts = st.opts ?? {};
++  const total = st.results.length;
++
++  const sum = document.createElement('p');
++  sum.className = 'survey-summary';
++  sum.textContent =
++    `${total} graph${total === 1 ? '' : 's'} on ≤ ${opts.n} vertices` +
++    (st.done ? '' : ' so far') +
++    (opts.linear || opts.cyclic ? ` · ${surveyGroupStats(st.results, opts)}` : '');
++  el.appendChild(sum);
++
++  // conjecture verdicts
++  if (opts.linear) {
++    const cex = st.results.filter((r) => r.hamPath && r.strip === false);
++    const p = document.createElement('p');
++    p.className = 'conj ' + (cex.length ? 'bad' : 'ok');
++    p.textContent = cex.length
++      ? `✗ ${cex.length} counterexample${cex.length === 1 ? '' : 's'}: ` +
++        'Hamilton path but no rhombic strip!'
++      : (st.done ? '✓ ' : '') +
++        'Hamilton path ⇒ rhombic strip: no counterexample' +
++        (st.done ? '.' : ' so far.');
++    el.appendChild(p);
++  }
++  if (opts.cyclic) {
++    const bad = st.results.filter((r) => r.hamCycle && r.cyclicStrip === false);
++    const p = document.createElement('p');
++    p.className = 'conj note';
++    p.textContent =
++      `Hamilton cycle without cyclic strip: ${bad.length} graph` +
++      `${bad.length === 1 ? '' : 's'}` +
++      (bad.length ? ' (the cyclic analogue fails, as known).' : '.');
++    el.appendChild(p);
++  }
++
++  const groups = $('survey-ham').checked
++    ? [
++        ['Hamilton cycle', (r) => r.hamCycle],
++        ['Hamilton path only', (r) => r.hamPath && !r.hamCycle],
++        ['No Hamilton path', (r) => !r.hamPath],
++      ]
++    : [['All graphs', () => true]];
++
++  const badness = (r) =>
++    r.hamPath && r.strip === false ? 0 // counterexample first
++    : r.strip === false ? 1
++    : r.hamCycle && r.cyclicStrip === false ? 2
++    : 3;
++
++  for (const [name, pred] of groups) {
++    const rs = st.results.filter(pred);
++    if (rs.length === 0) continue;
++    rs.sort(
++      (a, b) =>
++        a.n - b.n || badness(a) - badness(b) || a.edges.length - b.edges.length
++    );
++    const det = document.createElement('details');
++    det.className = 'survey-group';
++    det.open = true;
++    const summary = document.createElement('summary');
++    summary.textContent = `${name} — ${surveyGroupStats(rs, opts)}`;
++    det.appendChild(summary);
++    const grid = document.createElement('div');
++    grid.className = 'g-grid';
++    for (const r of rs) grid.appendChild(surveyCard(r));
++    det.appendChild(grid);
++    el.appendChild(det);
++  }
++}
++
++$('survey-ham').addEventListener('change', renderSurvey);
++
++// ---- boundary rendering ---------------------------------------------------
++
++function renderBounds() {
++  const el = $('bounds-results');
++  const st = scripts.bounds;
++  const active = !$('script-bounds-opts').hidden;
++  el.hidden = !active || st.pairs.length === 0;
++  el.innerHTML = '';
++  if (el.hidden) return;
++
++  const head = document.createElement('div');
++  head.className = 'bounds-head';
++  const sum = document.createElement('p');
++  sum.className = 'survey-summary';
++  sum.textContent =
++    `${st.count} strip${st.count === 1 ? '' : 's'} · ` +
++    `${st.distinct} boundary pair${st.distinct === 1 ? '' : 's'}` +
++    (st.done ? '' : ' …');
++  head.appendChild(sum);
++  const copy = document.createElement('button');
++  copy.className = 'small';
++  copy.textContent = 'Copy';
++  copy.addEventListener('click', async () => {
++    const text = st.pairs
++      .map((p) => `${p.left} -> ${p.right}  x${p.count}`)
++      .join('\n');
++    try {
++      await navigator.clipboard.writeText(text);
++      log('Boundary pairs copied to clipboard.');
++    } catch {
++      log('Clipboard unavailable — select the pairs manually.', true);
++    }
++  });
++  head.appendChild(copy);
++  el.appendChild(head);
++
++  const list = document.createElement('div');
++  list.className = 'pair-list';
++  for (const p of st.pairs) {
++    const row = document.createElement('div');
++    row.className = 'pair-row';
++    const code = document.createElement('code');
++    code.textContent = `${p.left} → ${p.right}`;
++    const count = document.createElement('span');
++    count.className = 'pair-count';
++    count.textContent = `×${p.count}`;
++    row.append(code, count);
++    list.appendChild(row);
++  }
++  el.appendChild(list);
++}
++
+ // ---------------------------------------------------------------------------
+ // Boot
+ // ---------------------------------------------------------------------------
+diff --git a/www/index.html b/www/index.html
+index 395c927..c406b1d 100644
+--- a/www/index.html
++++ b/www/index.html
+@@ -132,6 +132,44 @@
+     </div>
+   </section>
+ 
++  <section class="scripts-section">
++    <details id="scripts-box">
++      <summary class="scripts-summary">Scripts</summary>
++
++      <div class="script-switch" role="tablist" aria-label="Script">
++        <button id="script-tab-survey" class="active" role="tab" aria-selected="true" title="All connected graphs up to n vertices, tube posets checked for strips">Graph survey</button>
++        <button id="script-tab-bounds" role="tab" aria-selected="false" title="All strips of the current poset, tallied by boundary permutations">Strip boundaries</button>
++      </div>
++
++      <div id="script-survey-opts">
++        <p class="script-explain">All connected graphs on up to n vertices (one per isomorphism class); each tube poset is searched for strips.</p>
++        <div class="row">
++          <label class="inline" for="survey-n">n ≤</label>
++          <input id="survey-n" type="number" min="2" max="7" value="5">
++          <button id="btn-run-survey" class="grow">Run survey</button>
++        </div>
++        <label class="check"><input id="survey-linear" type="checkbox" checked> Rhombic strips</label>
++        <label class="check"><input id="survey-cyclic" type="checkbox"> Cyclic strips</label>
++        <label class="check"><input id="survey-ham" type="checkbox" checked> Group by Hamiltonicity</label>
++        <p class="script-explain dim2">Conjecture: Hamilton path ⇒ rhombic strip. Its cyclic analogue is false. n&nbsp;=&nbsp;7 checks 853 graphs and can take very long in the browser.</p>
++      </div>
++
++      <div id="script-bounds-opts" hidden>
++        <p class="script-explain">Enumerates every rhombic strip of the poset in the editor, reads its left and right boundary chain bottom-to-top as a permutation, and tallies the pairs (start&nbsp;→&nbsp;end). Cyclic strips have no boundary, so this is inherently linear.</p>
++        <button id="btn-run-bounds" class="block">Enumerate boundaries <span class="dim">current poset</span></button>
++      </div>
++
++      <div id="script-job" class="job" hidden>
++        <span class="spinner" aria-hidden="true"></span>
++        <span id="script-status">running…</span>
++        <button id="btn-script-cancel" class="danger small">Cancel</button>
++      </div>
++
++      <div id="survey-results" class="survey-results" hidden></div>
++      <div id="bounds-results" class="bounds-results" hidden></div>
++    </details>
++  </section>
++
+   <section data-mode="poset">
+     <h2>File</h2>
+     <div class="row wrap">
+diff --git a/www/style.css b/www/style.css
+index cbbe75a..b7dfeba 100644
+--- a/www/style.css
++++ b/www/style.css
+@@ -346,6 +346,138 @@ section.compute {
+   top: -1px;
+ }
+ 
++/* ---- scripts panel ------------------------------------------------------- */
++
++.scripts-section { padding-top: 11px; }
++.scripts-summary {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  font-size: 11px;
++  font-weight: 600;
++  letter-spacing: 0.12em;
++  text-transform: uppercase;
++  color: var(--text-dim);
++  cursor: pointer;
++  list-style: none;
++}
++.scripts-summary::before { content: "▸"; font-size: 10px; transition: transform 120ms; }
++#scripts-box[open] > .scripts-summary::before { transform: rotate(90deg); }
++.scripts-summary::after {
++  content: "";
++  flex: 1;
++  height: 1px;
++  background: var(--hairline);
++}
++.scripts-summary::-webkit-details-marker { display: none; }
++#scripts-box[open] > .scripts-summary { margin-bottom: 10px; }
++
++.script-switch {
++  display: grid;
++  grid-template-columns: 1fr 1fr;
++  border: 1px solid var(--hairline);
++  border-radius: var(--radius);
++  overflow: hidden;
++  margin-bottom: 9px;
++}
++.script-switch button {
++  border: none;
++  border-radius: 0;
++  background: transparent;
++  color: var(--text-dim);
++  padding: 5px 4px;
++  font-size: 12.5px;
++}
++.script-switch button + button { border-left: 1px solid var(--hairline); }
++.script-switch button.active {
++  background: var(--panel-2);
++  color: var(--text);
++  box-shadow: inset 0 -2px 0 var(--sky);
++}
++
++.script-explain { margin: 0 0 9px; font-size: 12.5px; color: var(--text); }
++.script-explain.dim2 { color: var(--text-dim); font-size: 12px; margin: 9px 0 0; }
++#script-job #script-status { flex: 1; min-width: 0; }
++
++.survey-results, .bounds-results {
++  margin-top: 10px;
++  padding-top: 10px;
++  border-top: 1px dashed var(--hairline);
++}
++.survey-summary {
++  margin: 0 0 6px;
++  font-family: var(--font-mono);
++  font-size: 12px;
++  color: var(--text);
++}
++.conj {
++  margin: 0 0 6px;
++  font-size: 12.5px;
++  line-height: 1.4;
++}
++.conj.ok { color: var(--green); }
++.conj.bad { color: #ff9d66; font-weight: 600; }
++.conj.note { color: var(--text-dim); }
++
++.survey-group { margin-top: 7px; }
++.survey-group > summary { font-family: var(--font-mono); font-size: 11.5px; }
++.g-grid {
++  display: grid;
++  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
++  gap: 6px;
++  margin-top: 6px;
++}
++.g-card {
++  position: relative;
++  padding: 3px;
++  color: var(--text);
++  background: var(--ink);
++  line-height: 0;
++}
++.g-card svg { width: 100%; height: auto; display: block; }
++.g-card:hover:not(:disabled) { color: var(--sky); }
++.g-card.cex {
++  border-color: var(--vermillion);
++  box-shadow: 0 0 0 1px var(--vermillion);
++}
++.g-dots {
++  position: absolute;
++  right: 3px;
++  bottom: 3px;
++  display: flex;
++  gap: 3px;
++}
++.g-dot {
++  width: 7px; height: 7px;
++  border-radius: 50%;
++}
++.g-dot.cyc { border-radius: 2px; transform: rotate(45deg) scale(0.9); }
++.g-dot.ok { background: var(--green); }
++.g-dot.bad { background: var(--vermillion); }
++
++.bounds-head {
++  display: flex;
++  align-items: baseline;
++  justify-content: space-between;
++  gap: 8px;
++}
++.pair-list {
++  max-height: 300px;
++  overflow-y: auto;
++  font-family: var(--font-mono);
++  font-size: 11.5px;
++}
++.pair-row {
++  display: flex;
++  justify-content: space-between;
++  align-items: baseline;
++  gap: 10px;
++  padding: 2px 0;
++  border-bottom: 1px dotted var(--hairline);
++}
++.pair-row code { overflow-wrap: anywhere; }
++.pair-count { color: var(--text-dim); flex: none; }
++
+ /* ---- log / help link ---------------------------------------------------- */
+ 
+ .panel-foot { padding: 12px 16px 16px; margin-top: auto; }
+diff --git a/www/worker.js b/www/worker.js
+index e78dfde..a7e4ac3 100644
+--- a/www/worker.js
++++ b/www/worker.js
+@@ -6,8 +6,16 @@
+ // only searches ahead of the browsing cursor by the lookahead the main
+ // thread asked for ('advance' raises it), so memory stays proportional to
+ // how far the user has browsed.
++//
++// The same worker also runs the Scripts panel's batch jobs ({cmd: 'survey' |
++// 'bounds'}, streaming {type: 'survey' | 'bounds'}); app.js uses a separate
++// Worker instance for those, so a script and a strip search never share one.
+ 
+-import init, { StripEnumerator } from './pkg/rhombic_strips.js';
++import init, {
++  StripEnumerator,
++  GraphSurvey,
++  BoundaryEnumerator,
++} from './pkg/rhombic_strips.js';
+ 
+ const ready = init();
+ 
+@@ -20,11 +28,19 @@ let sent = 0;
+ let wanted = BATCH;
+ let running = false;
+ 
++let script = null;     // GraphSurvey | BoundaryEnumerator
++let scriptType = null; // 'survey' | 'bounds'
++
+ function stop() {
+   if (en) {
+     en.free();
+     en = null;
+   }
++  if (script) {
++    script.free();
++    script = null;
++  }
++  scriptType = null;
+   running = false;
+ }
+ 
+@@ -54,6 +70,26 @@ function pump() {
+   setTimeout(pump, 0); // yield so 'cancel' / 'advance' can arrive
+ }
+ 
++// One slice of a Scripts job. Each slice's result (with its `done` flag) is
++// forwarded verbatim under the job's own message type; app.js accumulates.
++function pumpScript() {
++  if (!script) return;
++  let res;
++  try {
++    res = JSON.parse(script.step(BUDGET_MS));
++  } catch (err) {
++    postMessage({ type: 'error', message: String(err) });
++    stop();
++    return;
++  }
++  postMessage({ type: scriptType, ...res });
++  if (res.done) {
++    stop();
++    return;
++  }
++  setTimeout(pumpScript, 0);
++}
++
+ onmessage = async (e) => {
+   const msg = e.data;
+   if (msg.cmd === 'start') {
+@@ -76,6 +112,28 @@ onmessage = async (e) => {
+       running = true;
+       pump();
+     }
++  } else if (msg.cmd === 'survey') {
++    await ready;
++    stop();
++    try {
++      script = new GraphSurvey(msg.maxN, msg.linear, msg.cyclic);
++    } catch (err) {
++      postMessage({ type: 'error', message: String(err) });
++      return;
++    }
++    scriptType = 'survey';
++    pumpScript();
++  } else if (msg.cmd === 'bounds') {
++    await ready;
++    stop();
++    try {
++      script = new BoundaryEnumerator(JSON.stringify(msg.graph));
++    } catch (err) {
++      postMessage({ type: 'error', message: String(err) });
++      return;
++    }
++    scriptType = 'bounds';
++    pumpScript();
+   } else if (msg.cmd === 'cancel') {
+     stop();
+   }

@@ -4,6 +4,24 @@ Rhombic strips of graded posets — a Rust library with three front ends: a CLI
 (`src/main.rs`), a desktop egui explorer (`src/gui.rs`, `--interactive`), and a
 browser build (`src/web.rs` → wasm, served from `www/`, built with `./build.sh`).
 
+## Scripts
+
+The collapsible **Scripts** panel in the sidebar runs two batch jobs, both
+implemented in Rust (`src/scripts.rs`) and executed as sliceable wasm steppers
+in a dedicated Web Worker:
+
+* **Graph survey** — enumerates all connected graphs on up to *n* vertices
+  (one per isomorphism class, by vertex augmentation with canonical-form
+  deduplication), and checks each tube poset for rhombic strips and/or cyclic
+  strips. Results are visualized as clickable graph thumbnails, optionally
+  grouped by Hamiltonicity, probing the conjecture *Hamilton path ⇒ rhombic
+  strip* (counterexamples would be flagged; the cyclic analogue is known to
+  fail and the failing graphs are listed).
+* **Strip boundaries** — enumerates every linear rhombic strip of the poset
+  in the editor, reads its left and right boundary chains bottom-to-top as
+  permutations (added-token order, e.g. vertex insertion order in a tube
+  poset), and tallies the pairs (start&nbsp;→&nbsp;end) with multiplicities.
+
 ## Remote & native compute
 
 The web page's strip search normally runs as wasm in the browser tab

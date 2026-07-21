@@ -1602,6 +1602,380 @@ $('btn-copy-layers').addEventListener('click', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Scripts panel: batch jobs in a dedicated worker (src/scripts.rs). Uses its
+// own Worker instance so a running script never fights the strip search over
+// one thread; cancellation terminates the worker (same rationale as strips).
+// Script jobs survive diagram edits: the survey is independent of the editor,
+// and the boundary job snapshots the poset when it starts.
+// ---------------------------------------------------------------------------
+
+const scripts = {
+  worker: null,
+  job: null, // {kind: 'survey' | 'bounds', started}
+  survey: { results: [], opts: null, done: false },
+  bounds: { pairs: [], count: 0, distinct: 0, done: false },
+};
+
+function scriptWorker() {
+  if (!scripts.worker) {
+    scripts.worker = new Worker(new URL('./worker.js', import.meta.url), {
+      type: 'module',
+    });
+    scripts.worker.onmessage = (e) => onScriptMessage(e.data);
+  }
+  return scripts.worker;
+}
+
+function cancelScript(quiet = false) {
+  if (scripts.worker) {
+    // terminate, don't post: one script step can take arbitrarily long
+    // (a single hard strip-existence search), so a 'cancel' message might
+    // never be seen. A fresh worker is created lazily on the next run.
+    scripts.worker.terminate();
+    scripts.worker = null;
+  }
+  if (scripts.job) {
+    scripts.job = null;
+    updateScriptJobUi('');
+    if (!quiet) log('Script cancelled.');
+  }
+}
+
+function updateScriptJobUi(status) {
+  $('script-job').hidden = !scripts.job;
+  if (scripts.job && status !== undefined) {
+    $('script-status').textContent = status;
+  }
+}
+
+function scriptElapsed() {
+  return `${((performance.now() - scripts.job.started) / 1000).toFixed(1)}s`;
+}
+
+// ---- tabs -----------------------------------------------------------------
+
+function setScriptTab(kind) {
+  const survey = kind === 'survey';
+  $('script-tab-survey').classList.toggle('active', survey);
+  $('script-tab-bounds').classList.toggle('active', !survey);
+  $('script-tab-survey').setAttribute('aria-selected', survey);
+  $('script-tab-bounds').setAttribute('aria-selected', !survey);
+  $('script-survey-opts').hidden = !survey;
+  $('script-bounds-opts').hidden = survey;
+  renderSurvey();
+  renderBounds();
+}
+
+$('script-tab-survey').addEventListener('click', () => setScriptTab('survey'));
+$('script-tab-bounds').addEventListener('click', () => setScriptTab('bounds'));
+
+// ---- run ------------------------------------------------------------------
+
+$('btn-run-survey').addEventListener('click', () => {
+  const n = Math.min(7, Math.max(2, parseInt($('survey-n').value, 10) || 5));
+  $('survey-n').value = n;
+  const linear = $('survey-linear').checked;
+  const cyclic = $('survey-cyclic').checked;
+  cancelScript(true);
+  scripts.survey = { results: [], opts: { n, linear, cyclic }, done: false };
+  scripts.job = { kind: 'survey', started: performance.now() };
+  scriptWorker().postMessage({ cmd: 'survey', maxN: n, linear, cyclic });
+  updateScriptJobUi('generating graphs …');
+  renderSurvey();
+  log(`Surveying all connected graphs on ≤ ${n} vertices…`);
+});
+
+$('btn-run-bounds').addEventListener('click', () => {
+  if (state.mode !== 'poset') {
+    log('Strip boundaries runs on a poset — switch to poset mode.', true);
+    return;
+  }
+  const { wire } = toWire();
+  if (wire.labels.length === 0) {
+    log('The diagram is empty.', true);
+    return;
+  }
+  try {
+    poset_ranks(JSON.stringify(wire)); // early cycle check with a clear error
+  } catch (e) {
+    log(String(e), true);
+    return;
+  }
+  cancelScript(true);
+  scripts.bounds = { pairs: [], count: 0, distinct: 0, done: false };
+  scripts.job = { kind: 'bounds', started: performance.now() };
+  scriptWorker().postMessage({ cmd: 'bounds', graph: wire });
+  updateScriptJobUi('enumerating strips …');
+  renderBounds();
+  log('Enumerating strip boundaries…');
+});
+
+$('btn-script-cancel').addEventListener('click', () => cancelScript());
+
+// ---- messages -------------------------------------------------------------
+
+function onScriptMessage(msg) {
+  const job = scripts.job;
+  if (!job) return; // stale message from a cancelled job
+
+  if (msg.type === 'error') {
+    log(msg.message, true);
+    scripts.job = null;
+    updateScriptJobUi('');
+    return;
+  }
+
+  if (msg.type === 'survey' && job.kind === 'survey') {
+    const st = scripts.survey;
+    if (msg.results.length) st.results.push(...msg.results);
+    st.done = msg.done;
+    updateScriptJobUi(
+      msg.phase === 'generate'
+        ? `generating graphs (n=${msg.level}) … (${scriptElapsed()})`
+        : `checked ${msg.checked}/${msg.total} … (${scriptElapsed()})`
+    );
+    if (msg.results.length || msg.done) renderSurvey();
+    if (msg.done) {
+      log(`Survey finished: ${st.results.length} graphs (${scriptElapsed()}).`);
+      scripts.job = null;
+      updateScriptJobUi('');
+    }
+  } else if (msg.type === 'bounds' && job.kind === 'bounds') {
+    scripts.bounds = {
+      pairs: msg.pairs,
+      count: msg.count,
+      distinct: msg.distinct,
+      done: msg.done,
+    };
+    updateScriptJobUi(
+      `${msg.count} strips · ${msg.distinct} pairs … (${scriptElapsed()})`
+    );
+    renderBounds();
+    if (msg.done) {
+      log(
+        `Boundary enumeration finished: ${msg.count} strips, ` +
+          `${msg.distinct} boundary pairs (${scriptElapsed()}).`
+      );
+      scripts.job = null;
+      updateScriptJobUi('');
+    }
+  }
+}
+
+// ---- survey rendering -----------------------------------------------------
+
+const mark = (v) => (v === true ? '✓' : v === false ? '✗' : '·');
+
+function graphThumbSvg(r) {
+  const s = 56;
+  const cx = s / 2, cy = s / 2, rad = 19;
+  const pts = Array.from({ length: r.n }, (_, i) => {
+    const a = (2 * Math.PI * i) / r.n - Math.PI / 2;
+    return [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
+  });
+  const f = (x) => x.toFixed(1);
+  let svg = `<svg viewBox="0 0 ${s} ${s}" aria-hidden="true">`;
+  for (const [a, b] of r.edges) {
+    svg +=
+      `<line x1="${f(pts[a][0])}" y1="${f(pts[a][1])}" ` +
+      `x2="${f(pts[b][0])}" y2="${f(pts[b][1])}" ` +
+      `stroke="currentColor" stroke-width="1.4"/>`;
+  }
+  for (const [x, y] of pts) {
+    svg += `<circle cx="${f(x)}" cy="${f(y)}" r="2.6" fill="currentColor"/>`;
+  }
+  return svg + '</svg>';
+}
+
+function surveyCard(r) {
+  const opts = scripts.survey.opts ?? {};
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'g-card';
+  const cex = r.hamPath && r.strip === false; // conjecture counterexample
+  if (cex) card.classList.add('cex');
+
+  let dots = '';
+  if (opts.linear) {
+    dots += `<span class="g-dot ${r.strip ? 'ok' : 'bad'}" title="rhombic strip ${mark(r.strip)}"></span>`;
+  }
+  if (opts.cyclic) {
+    dots += `<span class="g-dot cyc ${r.cyclicStrip ? 'ok' : 'bad'}" title="cyclic strip ${mark(r.cyclicStrip)}"></span>`;
+  }
+
+  card.title =
+    `n=${r.n} · ${r.edges.length} edges · ${r.tubes} tubes · ` +
+    `Ham path ${mark(r.hamPath)} · Ham cycle ${mark(r.hamCycle)}` +
+    (opts.linear ? ` · strip ${mark(r.strip)}` : '') +
+    (opts.cyclic ? ` · cyclic strip ${mark(r.cyclicStrip)}` : '') +
+    (cex ? ' — COUNTEREXAMPLE' : '') +
+    '\nClick to open in the graph editor.';
+  card.innerHTML =
+    graphThumbSvg(r) + (dots ? `<span class="g-dots">${dots}</span>` : '');
+  card.addEventListener('click', () => {
+    const wire = {
+      labels: Array.from({ length: r.n }, (_, i) => String(i)),
+      edges: r.edges,
+    };
+    replaceGraph(
+      wire,
+      'graph',
+      `Survey graph: n=${r.n}, ${r.edges.length} edges — ` +
+        `Ham path ${mark(r.hamPath)}, Ham cycle ${mark(r.hamCycle)}` +
+        (opts.linear ? `, strip ${mark(r.strip)}` : '') +
+        (opts.cyclic ? `, cyclic ${mark(r.cyclicStrip)}` : '') + '.',
+      'circle'
+    );
+  });
+  return card;
+}
+
+function surveyGroupStats(rs, opts) {
+  const bits = [`${rs.length}`];
+  if (opts.linear) {
+    bits.push(`strip ${rs.filter((r) => r.strip === true).length}/${rs.length}`);
+  }
+  if (opts.cyclic) {
+    bits.push(
+      `cyclic ${rs.filter((r) => r.cyclicStrip === true).length}/${rs.length}`
+    );
+  }
+  return bits.join(' · ');
+}
+
+function renderSurvey() {
+  const el = $('survey-results');
+  const st = scripts.survey;
+  const active = !$('script-survey-opts').hidden;
+  el.hidden = !active || st.results.length === 0;
+  el.innerHTML = '';
+  if (el.hidden) return;
+
+  const opts = st.opts ?? {};
+  const total = st.results.length;
+
+  const sum = document.createElement('p');
+  sum.className = 'survey-summary';
+  sum.textContent =
+    `${total} graph${total === 1 ? '' : 's'} on ≤ ${opts.n} vertices` +
+    (st.done ? '' : ' so far') +
+    (opts.linear || opts.cyclic ? ` · ${surveyGroupStats(st.results, opts)}` : '');
+  el.appendChild(sum);
+
+  // conjecture verdicts
+  if (opts.linear) {
+    const cex = st.results.filter((r) => r.hamPath && r.strip === false);
+    const p = document.createElement('p');
+    p.className = 'conj ' + (cex.length ? 'bad' : 'ok');
+    p.textContent = cex.length
+      ? `✗ ${cex.length} counterexample${cex.length === 1 ? '' : 's'}: ` +
+        'Hamilton path but no rhombic strip!'
+      : (st.done ? '✓ ' : '') +
+        'Hamilton path ⇒ rhombic strip: no counterexample' +
+        (st.done ? '.' : ' so far.');
+    el.appendChild(p);
+  }
+  if (opts.cyclic) {
+    const bad = st.results.filter((r) => r.hamCycle && r.cyclicStrip === false);
+    const p = document.createElement('p');
+    p.className = 'conj note';
+    p.textContent =
+      `Hamilton cycle without cyclic strip: ${bad.length} graph` +
+      `${bad.length === 1 ? '' : 's'}` +
+      (bad.length ? ' (the cyclic analogue fails, as known).' : '.');
+    el.appendChild(p);
+  }
+
+  const groups = $('survey-ham').checked
+    ? [
+        ['Hamilton cycle', (r) => r.hamCycle],
+        ['Hamilton path only', (r) => r.hamPath && !r.hamCycle],
+        ['No Hamilton path', (r) => !r.hamPath],
+      ]
+    : [['All graphs', () => true]];
+
+  const badness = (r) =>
+    r.hamPath && r.strip === false ? 0 // counterexample first
+    : r.strip === false ? 1
+    : r.hamCycle && r.cyclicStrip === false ? 2
+    : 3;
+
+  for (const [name, pred] of groups) {
+    const rs = st.results.filter(pred);
+    if (rs.length === 0) continue;
+    rs.sort(
+      (a, b) =>
+        a.n - b.n || badness(a) - badness(b) || a.edges.length - b.edges.length
+    );
+    const det = document.createElement('details');
+    det.className = 'survey-group';
+    det.open = true;
+    const summary = document.createElement('summary');
+    summary.textContent = `${name} — ${surveyGroupStats(rs, opts)}`;
+    det.appendChild(summary);
+    const grid = document.createElement('div');
+    grid.className = 'g-grid';
+    for (const r of rs) grid.appendChild(surveyCard(r));
+    det.appendChild(grid);
+    el.appendChild(det);
+  }
+}
+
+$('survey-ham').addEventListener('change', renderSurvey);
+
+// ---- boundary rendering ---------------------------------------------------
+
+function renderBounds() {
+  const el = $('bounds-results');
+  const st = scripts.bounds;
+  const active = !$('script-bounds-opts').hidden;
+  el.hidden = !active || st.pairs.length === 0;
+  el.innerHTML = '';
+  if (el.hidden) return;
+
+  const head = document.createElement('div');
+  head.className = 'bounds-head';
+  const sum = document.createElement('p');
+  sum.className = 'survey-summary';
+  sum.textContent =
+    `${st.count} strip${st.count === 1 ? '' : 's'} · ` +
+    `${st.distinct} boundary pair${st.distinct === 1 ? '' : 's'}` +
+    (st.done ? '' : ' …');
+  head.appendChild(sum);
+  const copy = document.createElement('button');
+  copy.className = 'small';
+  copy.textContent = 'Copy';
+  copy.addEventListener('click', async () => {
+    const text = st.pairs
+      .map((p) => `${p.left} -> ${p.right}  x${p.count}`)
+      .join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      log('Boundary pairs copied to clipboard.');
+    } catch {
+      log('Clipboard unavailable — select the pairs manually.', true);
+    }
+  });
+  head.appendChild(copy);
+  el.appendChild(head);
+
+  const list = document.createElement('div');
+  list.className = 'pair-list';
+  for (const p of st.pairs) {
+    const row = document.createElement('div');
+    row.className = 'pair-row';
+    const code = document.createElement('code');
+    code.textContent = `${p.left} → ${p.right}`;
+    const count = document.createElement('span');
+    count.className = 'pair-count';
+    count.textContent = `×${p.count}`;
+    row.append(code, count);
+    list.appendChild(row);
+  }
+  el.appendChild(list);
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 

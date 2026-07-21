@@ -6,8 +6,16 @@
 // only searches ahead of the browsing cursor by the lookahead the main
 // thread asked for ('advance' raises it), so memory stays proportional to
 // how far the user has browsed.
+//
+// The same worker also runs the Scripts panel's batch jobs ({cmd: 'survey' |
+// 'bounds'}, streaming {type: 'survey' | 'bounds'}); app.js uses a separate
+// Worker instance for those, so a script and a strip search never share one.
 
-import init, { StripEnumerator } from './pkg/rhombic_strips.js';
+import init, {
+  StripEnumerator,
+  GraphSurvey,
+  BoundaryEnumerator,
+} from './pkg/rhombic_strips.js';
 
 const ready = init();
 
@@ -20,11 +28,19 @@ let sent = 0;
 let wanted = BATCH;
 let running = false;
 
+let script = null;     // GraphSurvey | BoundaryEnumerator
+let scriptType = null; // 'survey' | 'bounds'
+
 function stop() {
   if (en) {
     en.free();
     en = null;
   }
+  if (script) {
+    script.free();
+    script = null;
+  }
+  scriptType = null;
   running = false;
 }
 
@@ -54,6 +70,26 @@ function pump() {
   setTimeout(pump, 0); // yield so 'cancel' / 'advance' can arrive
 }
 
+// One slice of a Scripts job. Each slice's result (with its `done` flag) is
+// forwarded verbatim under the job's own message type; app.js accumulates.
+function pumpScript() {
+  if (!script) return;
+  let res;
+  try {
+    res = JSON.parse(script.step(BUDGET_MS));
+  } catch (err) {
+    postMessage({ type: 'error', message: String(err) });
+    stop();
+    return;
+  }
+  postMessage({ type: scriptType, ...res });
+  if (res.done) {
+    stop();
+    return;
+  }
+  setTimeout(pumpScript, 0);
+}
+
 onmessage = async (e) => {
   const msg = e.data;
   if (msg.cmd === 'start') {
@@ -76,6 +112,28 @@ onmessage = async (e) => {
       running = true;
       pump();
     }
+  } else if (msg.cmd === 'survey') {
+    await ready;
+    stop();
+    try {
+      script = new GraphSurvey(msg.maxN, msg.linear, msg.cyclic);
+    } catch (err) {
+      postMessage({ type: 'error', message: String(err) });
+      return;
+    }
+    scriptType = 'survey';
+    pumpScript();
+  } else if (msg.cmd === 'bounds') {
+    await ready;
+    stop();
+    try {
+      script = new BoundaryEnumerator(JSON.stringify(msg.graph));
+    } catch (err) {
+      postMessage({ type: 'error', message: String(err) });
+      return;
+    }
+    scriptType = 'bounds';
+    pumpScript();
   } else if (msg.cmd === 'cancel') {
     stop();
   }

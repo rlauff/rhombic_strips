@@ -132,6 +132,44 @@
     </div>
   </section>
 
+  <section class="scripts-section">
+    <details id="scripts-box">
+      <summary class="scripts-summary">Scripts</summary>
+
+      <div class="script-switch" role="tablist" aria-label="Script">
+        <button id="script-tab-survey" class="active" role="tab" aria-selected="true" title="All connected graphs up to n vertices, tube posets checked for strips">Graph survey</button>
+        <button id="script-tab-bounds" role="tab" aria-selected="false" title="All strips of the current poset, tallied by boundary permutations">Strip boundaries</button>
+      </div>
+
+      <div id="script-survey-opts">
+        <p class="script-explain">All connected graphs on up to n vertices (one per isomorphism class); each tube poset is searched for strips.</p>
+        <div class="row">
+          <label class="inline" for="survey-n">n ≤</label>
+          <input id="survey-n" type="number" min="2" max="7" value="5">
+          <button id="btn-run-survey" class="grow">Run survey</button>
+        </div>
+        <label class="check"><input id="survey-linear" type="checkbox" checked> Rhombic strips</label>
+        <label class="check"><input id="survey-cyclic" type="checkbox"> Cyclic strips</label>
+        <label class="check"><input id="survey-ham" type="checkbox" checked> Group by Hamiltonicity</label>
+        <p class="script-explain dim2">Conjecture: Hamilton path ⇒ rhombic strip. Its cyclic analogue is false. n&nbsp;=&nbsp;7 checks 853 graphs and can take very long in the browser.</p>
+      </div>
+
+      <div id="script-bounds-opts" hidden>
+        <p class="script-explain">Enumerates every rhombic strip of the poset in the editor, reads its left and right boundary chain bottom-to-top as a permutation, and tallies the pairs (start&nbsp;→&nbsp;end). Cyclic strips have no boundary, so this is inherently linear.</p>
+        <button id="btn-run-bounds" class="block">Enumerate boundaries <span class="dim">current poset</span></button>
+      </div>
+
+      <div id="script-job" class="job" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="script-status">running…</span>
+        <button id="btn-script-cancel" class="danger small">Cancel</button>
+      </div>
+
+      <div id="survey-results" class="survey-results" hidden></div>
+      <div id="bounds-results" class="bounds-results" hidden></div>
+    </details>
+  </section>
+
   <section data-mode="poset">
     <h2>File</h2>
     <div class="row wrap">

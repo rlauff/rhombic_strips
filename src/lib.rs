@@ -31,3 +31,9 @@ pub mod gui;
 
 /// Browser bindings plus the host-testable [`web::api`] core.
 pub mod web;
+
+/// Batch "scripts" for the browser's Scripts panel: computations over
+/// *families* of objects (all small graphs, all strips of one poset) rather
+/// than a single search on the drawn diagram. Same architecture as [`web`]:
+/// a pure, host-testable core plus thin sliceable `#[wasm_bindgen]` steppers.
+pub mod scripts;
